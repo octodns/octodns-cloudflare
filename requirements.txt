@@ -1,0 +1,2 @@
+octodns==0.9.14
+# TODO: add any other runtime requirements, these should be exhaustive and pinned 
