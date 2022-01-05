@@ -27,12 +27,12 @@ setup(
     name='octodns-cloudflare',
     packages=('octodns_cloudflare',),
     python_requires='>=3.6',
-    install_requires=('octodns>=0.9.14', 'TODO: other requirements'),
+    install_requires=('octodns>=0.9.14', 'requests>=2.27.0'),
     url='https://github.com/octodns/octodns-cloudflare',
     version=version(),
     tests_require=(
         'nose',
         'nose-no-network',
-        'TODO: other test-time requirements'
+        'requests_mock',
     ),
 )
