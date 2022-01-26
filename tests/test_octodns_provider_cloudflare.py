@@ -30,7 +30,7 @@ def set_record_proxied_flag(record, proxied):
 
 class TestCloudflareProvider(TestCase):
     expected = Zone('unit.tests.', [])
-    source = YamlProvider('test', join(dirname(__file__), 'tests', 'config'))
+    source = YamlProvider('test', join(dirname(__file__), 'config'))
     source.populate(expected)
 
     # Our test suite differs a bit, add our NS and remove the simple one
@@ -63,8 +63,8 @@ class TestCloudflareProvider(TestCase):
                 zone = Zone('unit.tests.', [])
                 provider.populate(zone)
 
-            self.assertEquals('CloudflareError', type(ctx.exception).__name__)
-            self.assertEquals('request was invalid', str(ctx.exception))
+            self.assertEqual('CloudflareError', type(ctx.exception).__name__)
+            self.assertEqual('request was invalid', str(ctx.exception))
 
         # Bad auth
         with requests_mock() as mock:
@@ -76,10 +76,10 @@ class TestCloudflareProvider(TestCase):
             with self.assertRaises(Exception) as ctx:
                 zone = Zone('unit.tests.', [])
                 provider.populate(zone)
-            self.assertEquals('CloudflareAuthenticationError',
-                              type(ctx.exception).__name__)
-            self.assertEquals('Unknown X-Auth-Key or X-Auth-Email',
-                              str(ctx.exception))
+            self.assertEqual('CloudflareAuthenticationError',
+                             type(ctx.exception).__name__)
+            self.assertEqual('Unknown X-Auth-Key or X-Auth-Email',
+                             str(ctx.exception))
 
         # Bad auth, unknown resp
         with requests_mock() as mock:
@@ -88,9 +88,9 @@ class TestCloudflareProvider(TestCase):
             with self.assertRaises(Exception) as ctx:
                 zone = Zone('unit.tests.', [])
                 provider.populate(zone)
-            self.assertEquals('CloudflareAuthenticationError',
-                              type(ctx.exception).__name__)
-            self.assertEquals('Cloudflare error', str(ctx.exception))
+            self.assertEqual('CloudflareAuthenticationError',
+                             type(ctx.exception).__name__)
+            self.assertEqual('Cloudflare error', str(ctx.exception))
 
         # General error
         with requests_mock() as mock:
@@ -99,7 +99,7 @@ class TestCloudflareProvider(TestCase):
             with self.assertRaises(HTTPError) as ctx:
                 zone = Zone('unit.tests.', [])
                 provider.populate(zone)
-            self.assertEquals(502, ctx.exception.response.status_code)
+            self.assertEqual(502, ctx.exception.response.status_code)
 
         # Rate Limit error
         with requests_mock() as mock:
@@ -113,11 +113,11 @@ class TestCloudflareProvider(TestCase):
                 zone = Zone('unit.tests.', [])
                 provider.populate(zone)
 
-            self.assertEquals('CloudflareRateLimitError',
-                              type(ctx.exception).__name__)
-            self.assertEquals('More than 1200 requests per 300 seconds '
-                              'reached. Please wait and consider throttling '
-                              'your request speed', str(ctx.exception))
+            self.assertEqual('CloudflareRateLimitError',
+                             type(ctx.exception).__name__)
+            self.assertEqual('More than 1200 requests per 300 seconds '
+                             'reached. Please wait and consider throttling '
+                             'your request speed', str(ctx.exception))
 
         # Rate Limit error, unknown resp
         with requests_mock() as mock:
@@ -127,9 +127,9 @@ class TestCloudflareProvider(TestCase):
                 zone = Zone('unit.tests.', [])
                 provider.populate(zone)
 
-            self.assertEquals('CloudflareRateLimitError',
-                              type(ctx.exception).__name__)
-            self.assertEquals('Cloudflare error', str(ctx.exception))
+            self.assertEqual('CloudflareRateLimitError',
+                             type(ctx.exception).__name__)
+            self.assertEqual('Cloudflare error', str(ctx.exception))
 
         # Non-existent zone doesn't populate anything
         with requests_mock() as mock:
@@ -137,13 +137,13 @@ class TestCloudflareProvider(TestCase):
 
             zone = Zone('unit.tests.', [])
             provider.populate(zone)
-            self.assertEquals(set(), zone.records)
+            self.assertEqual(set(), zone.records)
 
         # re-populating the same non-existent zone uses cache and makes no
         # calls
         again = Zone('unit.tests.', [])
         provider.populate(again)
-        self.assertEquals(set(), again.records)
+        self.assertEqual(set(), again.records)
 
         # bust zone cache
         provider._zones = None
@@ -182,16 +182,16 @@ class TestCloudflareProvider(TestCase):
 
             zone = Zone('unit.tests.', [])
             provider.populate(zone)
-            self.assertEquals(19, len(zone.records))
+            self.assertEqual(19, len(zone.records))
 
             changes = self.expected.changes(zone, provider)
 
-            self.assertEquals(4, len(changes))
+            self.assertEqual(4, len(changes))
 
         # re-populating the same zone/records comes out of cache, no calls
         again = Zone('unit.tests.', [])
         provider.populate(again)
-        self.assertEquals(19, len(again.records))
+        self.assertEqual(19, len(again.records))
 
     def test_apply(self):
         provider = CloudflareProvider('test', 'email', 'token', retry_period=0)
@@ -209,8 +209,8 @@ class TestCloudflareProvider(TestCase):
 
         # non-existent zone, create everything
         plan = provider.plan(self.expected)
-        self.assertEquals(17, len(plan.changes))
-        self.assertEquals(17, provider.apply(plan))
+        self.assertEqual(17, len(plan.changes))
+        self.assertEqual(17, provider.apply(plan))
         self.assertFalse(plan.exists)
 
         provider._request.assert_has_calls([
@@ -258,7 +258,7 @@ class TestCloudflareProvider(TestCase):
             }),
         ], True)
         # expected number of total calls
-        self.assertEquals(29, provider._request.call_count)
+        self.assertEqual(29, provider._request.call_count)
 
         provider._request.reset_mock()
 
@@ -416,8 +416,8 @@ class TestCloudflareProvider(TestCase):
 
         plan = provider.plan(wanted)
         # only see the delete & ttl update, below min-ttl is filtered out
-        self.assertEquals(4, len(plan.changes))
-        self.assertEquals(4, provider.apply(plan))
+        self.assertEqual(4, len(plan.changes))
+        self.assertEqual(4, provider.apply(plan))
         self.assertTrue(plan.exists)
         # creates a the new value and then deletes all the old
         provider._request.assert_has_calls([
@@ -776,7 +776,7 @@ class TestCloudflareProvider(TestCase):
         })
 
         ptr_record_contents = provider._gen_data(ptr_record)
-        self.assertEquals({
+        self.assertEqual({
             'name': 'ptr.unit.tests',
             'ttl': 300,
             'type': 'PTR',
@@ -809,7 +809,7 @@ class TestCloudflareProvider(TestCase):
         })
 
         loc_record_contents = provider._gen_data(loc_record)
-        self.assertEquals({
+        self.assertEqual({
             'name': 'example.unit.tests',
             'ttl': 300,
             'type': 'LOC',
@@ -858,7 +858,7 @@ class TestCloudflareProvider(TestCase):
 
         srv_record_contents = provider._gen_data(srv_record)
         srv_record_with_sub_contents = provider._gen_data(srv_record_with_sub)
-        self.assertEquals({
+        self.assertEqual({
             'name': '_example._tcp.unit.tests',
             'ttl': 300,
             'type': 'SRV',
@@ -872,7 +872,7 @@ class TestCloudflareProvider(TestCase):
                 'target': 'nc.unit.tests'
             }
         }, list(srv_record_contents)[0])
-        self.assertEquals({
+        self.assertEqual({
             'name': '_example._tcp.sub.unit.tests',
             'ttl': 300,
             'type': 'SRV',
@@ -913,16 +913,16 @@ class TestCloudflareProvider(TestCase):
 
         zone = Zone('unit.tests.', [])
         provider.populate(zone)
-        self.assertEquals(1, len(zone.records))
+        self.assertEqual(1, len(zone.records))
         record = list(zone.records)[0]
-        self.assertEquals('', record.name)
-        self.assertEquals('unit.tests.', record.fqdn)
-        self.assertEquals('ALIAS', record._type)
-        self.assertEquals('www.unit.tests.', record.value)
+        self.assertEqual('', record.name)
+        self.assertEqual('unit.tests.', record.fqdn)
+        self.assertEqual('ALIAS', record._type)
+        self.assertEqual('www.unit.tests.', record.value)
 
         # Make sure we transform back to CNAME going the other way
         contents = provider._gen_data(record)
-        self.assertEquals({
+        self.assertEqual({
             'content': 'www.unit.tests.',
             'name': 'unit.tests',
             'proxied': False,
@@ -1077,27 +1077,27 @@ class TestCloudflareProvider(TestCase):
 
         # the two A records get merged into one CNAME record pointing to
         # the CDN.
-        self.assertEquals(3, len(zone.records))
+        self.assertEqual(3, len(zone.records))
 
         ordered = sorted(zone.records, key=lambda r: r.name)
 
         record = ordered[0]
-        self.assertEquals('a', record.name)
-        self.assertEquals('a.unit.tests.', record.fqdn)
-        self.assertEquals('CNAME', record._type)
-        self.assertEquals('a.unit.tests.cdn.cloudflare.net.', record.value)
+        self.assertEqual('a', record.name)
+        self.assertEqual('a.unit.tests.', record.fqdn)
+        self.assertEqual('CNAME', record._type)
+        self.assertEqual('a.unit.tests.cdn.cloudflare.net.', record.value)
 
         record = ordered[1]
-        self.assertEquals('cname', record.name)
-        self.assertEquals('cname.unit.tests.', record.fqdn)
-        self.assertEquals('CNAME', record._type)
-        self.assertEquals('cname.unit.tests.cdn.cloudflare.net.', record.value)
+        self.assertEqual('cname', record.name)
+        self.assertEqual('cname.unit.tests.', record.fqdn)
+        self.assertEqual('CNAME', record._type)
+        self.assertEqual('cname.unit.tests.cdn.cloudflare.net.', record.value)
 
         record = ordered[2]
-        self.assertEquals('multi', record.name)
-        self.assertEquals('multi.unit.tests.', record.fqdn)
-        self.assertEquals('CNAME', record._type)
-        self.assertEquals('multi.unit.tests.cdn.cloudflare.net.', record.value)
+        self.assertEqual('multi', record.name)
+        self.assertEqual('multi.unit.tests.', record.fqdn)
+        self.assertEqual('CNAME', record._type)
+        self.assertEqual('multi.unit.tests.cdn.cloudflare.net.', record.value)
 
         # CDN enabled records can't be updated, we don't know the real values
         # never point a Cloudflare record to itself.
@@ -1119,7 +1119,7 @@ class TestCloudflareProvider(TestCase):
         }))
 
         plan = provider.plan(wanted)
-        self.assertEquals(1, len(plan.changes))
+        self.assertEqual(1, len(plan.changes))
 
     def test_cdn_alias(self):
         provider = CloudflareProvider('test', 'email', 'token', True)
@@ -1147,12 +1147,12 @@ class TestCloudflareProvider(TestCase):
 
         zone = Zone('unit.tests.', [])
         provider.populate(zone)
-        self.assertEquals(1, len(zone.records))
+        self.assertEqual(1, len(zone.records))
         record = list(zone.records)[0]
-        self.assertEquals('', record.name)
-        self.assertEquals('unit.tests.', record.fqdn)
-        self.assertEquals('ALIAS', record._type)
-        self.assertEquals('unit.tests.cdn.cloudflare.net.', record.value)
+        self.assertEqual('', record.name)
+        self.assertEqual('unit.tests.', record.fqdn)
+        self.assertEqual('ALIAS', record._type)
+        self.assertEqual('unit.tests.cdn.cloudflare.net.', record.value)
 
         # CDN enabled records can't be updated, we don't know the real values
         # never point a Cloudflare record to itself.
@@ -1164,7 +1164,7 @@ class TestCloudflareProvider(TestCase):
         }))
 
         plan = provider.plan(wanted)
-        self.assertEquals(False, hasattr(plan, 'changes'))
+        self.assertEqual(False, hasattr(plan, 'changes'))
 
     def test_unproxiabletype_recordfor_returnsrecordwithnocloudflare(self):
         provider = CloudflareProvider('test', 'email', 'token')
@@ -1485,7 +1485,7 @@ class TestCloudflareProvider(TestCase):
 
         extra_changes = provider._extra_changes(existing, desired, changes)
 
-        self.assertEquals(1, len(extra_changes))
+        self.assertEqual(1, len(extra_changes))
         self.assertFalse(
             extra_changes[0].existing._octodns['cloudflare']['proxied']
         )
@@ -1541,7 +1541,7 @@ class TestCloudflareProvider(TestCase):
 
         extra_changes = provider._extra_changes(existing, desired, changes)
 
-        self.assertEquals(1, len(extra_changes))
+        self.assertEqual(1, len(extra_changes))
         self.assertTrue(
             extra_changes[0].existing._octodns['cloudflare']['proxied']
         )
@@ -1553,12 +1553,12 @@ class TestCloudflareProvider(TestCase):
         provider = CloudflareProvider('test', token='token 123',
                                       email='email 234')
         headers = provider._sess.headers
-        self.assertEquals('email 234', headers['X-Auth-Email'])
-        self.assertEquals('token 123', headers['X-Auth-Key'])
+        self.assertEqual('email 234', headers['X-Auth-Email'])
+        self.assertEqual('token 123', headers['X-Auth-Key'])
 
         provider = CloudflareProvider('test', token='token 123')
         headers = provider._sess.headers
-        self.assertEquals('Bearer token 123', headers['Authorization'])
+        self.assertEqual('Bearer token 123', headers['Authorization'])
 
     def test_retry_behavior(self):
         provider = CloudflareProvider('test', token='token 123',
@@ -1580,7 +1580,7 @@ class TestCloudflareProvider(TestCase):
         provider._zones = None
         provider._request.reset_mock()
         provider._request.side_effect = [result]
-        self.assertEquals([], provider.zone_records(zone))
+        self.assertEqual([], provider.zone_records(zone))
         provider._request.assert_has_calls([call('GET', '/zones',
                                            params={'page': 1,
                                                    'per_page': 50})])
@@ -1592,7 +1592,7 @@ class TestCloudflareProvider(TestCase):
             CloudflareRateLimitError('{}'),
             result
         ]
-        self.assertEquals([], provider.zone_records(zone))
+        self.assertEqual([], provider.zone_records(zone))
         provider._request.assert_has_calls([call('GET', '/zones',
                                            params={'page': 1,
                                                    'per_page': 50})])
@@ -1605,7 +1605,7 @@ class TestCloudflareProvider(TestCase):
             CloudflareRateLimitError('{}'),
             result
         ]
-        self.assertEquals([], provider.zone_records(zone))
+        self.assertEqual([], provider.zone_records(zone))
         provider._request.assert_has_calls([call('GET', '/zones',
                                            params={'page': 1,
                                                    'per_page': 50})])
@@ -1622,12 +1622,12 @@ class TestCloudflareProvider(TestCase):
         ]
         with self.assertRaises(CloudflareRateLimitError) as ctx:
             provider.zone_records(zone)
-            self.assertEquals('last', str(ctx.exception))
+            self.assertEqual('last', str(ctx.exception))
 
     def test_ttl_mapping(self):
         provider = CloudflareProvider('test', 'email', 'token')
 
-        self.assertEquals(120, provider._ttl_data(120))
-        self.assertEquals(120, provider._ttl_data(120))
-        self.assertEquals(3600, provider._ttl_data(3600))
-        self.assertEquals(300, provider._ttl_data(1))
+        self.assertEqual(120, provider._ttl_data(120))
+        self.assertEqual(120, provider._ttl_data(120))
+        self.assertEqual(3600, provider._ttl_data(3600))
+        self.assertEqual(300, provider._ttl_data(1))
