@@ -34,6 +34,6 @@ python3 -m venv $TMP_DIR
 . "$TMP_DIR/bin/activate"
 python setup.py install
 echo "## validate tests can run against installed code ###############################"
-pip install pytest pytest-network
+pip install pytest pytest-network requests_mock
 pytest --disable-network
 echo "## complete ####################################################################"
