@@ -41,6 +41,7 @@ _PROXIABLE_RECORD_TYPES = {'A', 'AAAA', 'ALIAS', 'CNAME'}
 class CloudflareProvider(BaseProvider):
     SUPPORTS_GEO = False
     SUPPORTS_DYNAMIC = False
+    SUPPORTS_ROOT_NS = True
     SUPPORTS = set(('ALIAS', 'A', 'AAAA', 'CAA', 'CNAME', 'LOC', 'MX', 'NS',
                     'PTR', 'SRV', 'SPF', 'TXT', 'URLFWD'))
 
