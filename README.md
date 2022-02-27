@@ -55,6 +55,8 @@ providers:
     #zones_per_page: 50
     # Optional. Default: 100. Number of dns records per page.
     #records_per_page: 100
+    # Optional. Default: False. Avoid setting proxied = false to supported records.
+    #ignore_proxied: true
 ```
 
 Note: The "proxied" flag of "A", "AAAA" and "CNAME" records can be managed via the YAML provider like so:
