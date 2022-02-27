@@ -48,7 +48,7 @@ class CloudflareProvider(BaseProvider):
     TIMEOUT = 15
 
     def __init__(self, id, email=None, token=None, cdn=False, retry_count=4,
-                 retry_period=300, zones_per_page=50, records_per_page=100,
+                 retry_period=300, zones_per_page=50, records_per_page=100, ignore_proxied=False,
                  *args, **kwargs):
         self.log = getLogger(f'CloudflareProvider[{id}]')
         self.log.debug('__init__: id=%s, email=%s, token=***, cdn=%s', id,
@@ -68,6 +68,7 @@ class CloudflareProvider(BaseProvider):
                 'Authorization': f'Bearer {token}',
             })
         self.cdn = cdn
+        self.ignore_proxied = ignore_proxied
         self.retry_count = retry_count
         self.retry_period = retry_period
         self.zones_per_page = zones_per_page
@@ -313,9 +314,10 @@ class CloudflareProvider(BaseProvider):
         record = Record.new(zone, name, data, source=self, lenient=lenient)
 
         if _type in _PROXIABLE_RECORD_TYPES:
-            record._octodns['cloudflare'] = {
-                'proxied': records[0].get('proxied', False)
-            }
+            if not self.ignore_proxied:
+                record._octodns['cloudflare'] = {
+                    'proxied': records[0].get('proxied', False)
+                }
 
         return record
 
