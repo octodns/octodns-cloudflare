@@ -19,6 +19,7 @@ description, long_description = descriptions()
 
 tests_require = (
     'pytest',
+    'pytest-cov',
     'pytest-network',
     'requests_mock',
 )

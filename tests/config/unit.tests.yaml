@@ -27,10 +27,6 @@
     - algorithm: 1
       fingerprint: 7491973e5f8b39d5327cd4e08bc81b05f7710b49
       fingerprint_type: 1
-  - type: NS
-    values:
-    - 6.2.3.4.
-    - 7.2.3.4.
   - type: CAA
     values:
     - flags: 0
