@@ -53,6 +53,7 @@ class CloudflareProvider(BaseProvider):
         self.log = getLogger(f'CloudflareProvider[{id}]')
         self.log.debug('__init__: id=%s, email=%s, token=***, cdn=%s', id,
                        email, cdn)
+        self.log.info('__init__: (octodns_cloudflare %s)', __VERSION__)
         super(CloudflareProvider, self).__init__(id, *args, **kwargs)
 
         sess = Session()
