@@ -1,4 +1,6 @@
+from os import environ
 from setuptools import find_packages, setup
+from subprocess import CalledProcessError, check_output
 
 
 def descriptions():
@@ -9,10 +11,23 @@ def descriptions():
 
 
 def version():
+    version = 'unknown'
     with open('octodns_cloudflare/__init__.py') as fh:
         for line in fh:
             if line.startswith('__VERSION__'):
-                return line.split("'")[1]
+                version = line.split("'")[1]
+                break
+
+    # pep440 style public & local version numbers
+    if environ.get('OCTODNS_RELEASE', False):
+        # public
+        return version
+    try:
+        sha = check_output(['git', 'rev-parse', 'HEAD']).decode('utf-8')[:8]
+    except (CalledProcessError, FileNotFoundError):
+        sha = 'unknown'
+    # local
+    return f'{version}+{sha}'
 
 
 description, long_description = descriptions()
