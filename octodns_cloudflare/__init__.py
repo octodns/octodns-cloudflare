@@ -87,9 +87,9 @@ class CloudflareProvider(BaseProvider):
                 if tries <= 1:
                     raise
                 tries -= 1
-                self.log.warn('rate limit encountered, pausing '
-                              'for %ds and trying again, %d remaining',
-                              self.retry_period, tries)
+                self.log.warning('rate limit encountered, pausing '
+                                 'for %ds and trying again, %d remaining',
+                                 self.retry_period, tries)
                 sleep(self.retry_period)
 
     def _request(self, method, path, params=None, data=None):

@@ -77,6 +77,10 @@ name:
 
 CloudflareProvider supports A, AAAA, ALIAS, CAA, CNAME, LOC, MX, NS, PTR, SPF, SRV, TXT, and URLFWD. There are restrictions on CAA tag support.
 
+#### Root NS Records
+
+CloudflareProvider does not supports root NS record management. They can partially be managed in the API, errors are thrown if you include the Cloudflare name servers in the values, but the system completely ignores the values set and serves up its own regardless.
+
 #### Dynamic
 
 CloudflareProvider does not support dynamic records.
