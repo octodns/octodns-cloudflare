@@ -42,7 +42,7 @@ class CloudflareProvider(BaseProvider):
     SUPPORTS_GEO = False
     SUPPORTS_DYNAMIC = False
     SUPPORTS = set(('ALIAS', 'A', 'AAAA', 'CAA', 'CNAME', 'LOC', 'MX', 'NS',
-                    'PTR', 'SRV', 'SPF', 'TXT', 'URLFWD'))
+                    'PTR', 'SRV', 'SPF', 'TXT'))
 
     MIN_TTL = 120
     TIMEOUT = 15
@@ -77,9 +77,8 @@ class CloudflareProvider(BaseProvider):
 
         self._zones = None
         self._zone_records = {}
-        if not self.pagerules:
-            self.SUPPORTS = set(('ALIAS', 'A', 'AAAA', 'CAA', 'CNAME', 'LOC', 'MX', 'NS',
-                    'PTR', 'SRV', 'SPF', 'TXT'))
+        if self.pagerules:
+            self.SUPPORTS.add('URLFWD')
 
     def _try_request(self, *args, **kwargs):
         tries = self.retry_count
@@ -613,7 +612,7 @@ class CloudflareProvider(BaseProvider):
     def _apply_Create(self, change):
         new = change.new
         zone_id = self.zones[new.zone.name]
-        if new._type == 'URLFWD' and self.pagerules:
+        if new._type == 'URLFWD':
             path = f'/zones/{zone_id}/pagerules'
         else:
             path = f'/zones/{zone_id}/dns_records'
@@ -717,7 +716,7 @@ class CloudflareProvider(BaseProvider):
         # otherwise required, just makes things deterministic
 
         # Creates
-        if _type == 'URLFWD' and self.pagerules:
+        if _type == 'URLFWD':
             path = f'/zones/{zone_id}/pagerules'
         else:
             path = f'/zones/{zone_id}/dns_records'
@@ -730,7 +729,7 @@ class CloudflareProvider(BaseProvider):
             record_id = info['record_id']
             data = info['data']
             old_data = info['old_data']
-            if _type == 'URLFWD' and self.pagerules:
+            if _type == 'URLFWD':
                 path = f'/zones/{zone_id}/pagerules/{record_id}'
             else:
                 path = f'/zones/{zone_id}/dns_records/{record_id}'
@@ -742,7 +741,7 @@ class CloudflareProvider(BaseProvider):
         for _, info in sorted(deletes.items()):
             record_id = info['record_id']
             old_data = info['data']
-            if _type == 'URLFWD' and self.pagerules:
+            if _type == 'URLFWD':
                 path = f'/zones/{zone_id}/pagerules/{record_id}'
             else:
                 path = f'/zones/{zone_id}/dns_records/{record_id}'
