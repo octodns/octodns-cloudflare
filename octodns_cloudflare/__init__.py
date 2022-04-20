@@ -48,8 +48,8 @@ class CloudflareProvider(BaseProvider):
     TIMEOUT = 15
 
     def __init__(self, id, email=None, token=None, cdn=False, pagerules=True,
-                retry_count=4, retry_period=300, zones_per_page=50,
-                records_per_page=100, *args, **kwargs):
+                 retry_count=4, retry_period=300, zones_per_page=50,
+                 records_per_page=100, *args, **kwargs):
         self.log = getLogger(f'CloudflareProvider[{id}]')
         self.log.debug('__init__: id=%s, email=%s, token=***, cdn=%s', id,
                        email, cdn)
@@ -78,8 +78,9 @@ class CloudflareProvider(BaseProvider):
         self._zones = None
         self._zone_records = {}
         if self.pagerules:
-            # copy the class static/ever present list of supported types into an instance property so that 
-            # when we modify it we won't change the shared version
+            # copy the class static/ever present list of supported types into
+            # an instance property so that when we modify it we won't change
+            # the shared version
             self.SUPPORTS = set(self.SUPPORTS)
             self.SUPPORTS.add('URLFWD')
 
@@ -294,7 +295,8 @@ class CloudflareProvider(BaseProvider):
                     page = None
             if self.pagerules:
                 path = f'/zones/{zone_id}/pagerules'
-                resp = self._try_request('GET', path, params={'status': 'active'})
+                resp = self._try_request('GET', path,
+                                         params={'status': 'active'})
                 for r in resp['result']:
                     # assumption, base on API guide, will only contain 1 action
                     if r['actions'][0]['id'] == 'forwarding_url':
