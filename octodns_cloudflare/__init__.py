@@ -78,6 +78,9 @@ class CloudflareProvider(BaseProvider):
         self._zones = None
         self._zone_records = {}
         if self.pagerules:
+            # copy the class static/ever present list of supported types into an instance property so that 
+            # when we modify it we won't change the shared version
+            self.SUPPORTS = set(self.SUPPORTS)
             self.SUPPORTS.add('URLFWD')
 
     def _try_request(self, *args, **kwargs):
