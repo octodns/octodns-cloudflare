@@ -764,6 +764,89 @@ class TestCloudflareProvider(TestCase):
                  '2a9141b18ffb0e6aed826054eec970b8'),
         ])
 
+    def test_pagerules(self):
+        provider = CloudflareProvider('test', 'email', 'token', retry_period=0,
+                                      pagerules=False)
+
+        # Set things up to preexist/mock as necessary
+        zone = Zone('unit.tests.', [])
+        # Stuff a fake zone id in place
+        provider._zones = {
+            zone.name: '42',
+        }
+        provider._request = Mock()
+        side_effect = [{
+            'result': [],
+            'result_info': {
+                'count': 0,
+                'per_page': 50,
+            },
+            # /zones/42/dns_records
+        }, {
+            'result': [{
+                "id": "2a9140b17ffb0e6aed826049eec974b7",
+                "targets": [
+                    {
+                        "target": "url",
+                        "constraint": {
+                            "operator": "matches",
+                            "value": "urlfwd1.unit.tests/"
+                        }
+                    }
+                ],
+                "actions": [
+                    {
+                        "id": "forwarding_url",
+                        "value": {
+                            "url": "https://www.unit.tests",
+                            "status_code": 302
+                        }
+                    }
+                ],
+                "priority": 1,
+                "status": "active",
+                "created_on": "2021-06-25T20:10:50.000000Z",
+                "modified_on": "2021-06-28T22:38:10.000000Z"
+            }],
+            'result_info': {
+                'count': 1,
+                'per_page': 50,
+            },
+            # /zones/42/pagerules
+        }]
+        provider._request.side_effect = side_effect
+
+        # Now we populate, and expect to see nothing
+        self.assertFalse(provider.plan(zone))
+        # We should have had only a single call to get the dns_records, no
+        # calls to pagerules
+        provider._request.assert_called_once()
+
+        # reset things
+        provider._zone_records = {}
+        provider.SUPPORTS.add('URLFWD')
+        provider._request.side_effect = side_effect
+        # enable pagerules
+        provider.pagerules = True
+        # plan again, this time we expect both calls and a record
+        plan = provider.plan(zone)
+        from pprint import pprint
+        pprint({
+            'plan': plan,
+            'changes': plan.changes,
+        })
+        self.assertEqual(1, len(plan.changes))
+        change = list(plan.changes)[0]
+        self.assertEqual('URLFWD', change.record._type)
+        provider._request.assert_has_calls([call('GET',
+                                                 '/zones/42/dns_records',
+                                                 params={'page': 1,
+                                                         'per_page': 100}),
+                                            call('GET',
+                                                 '/zones/42/pagerules',
+                                                 params={'status': 'active'}),
+                                            ])
+
     def test_ptr(self):
         provider = CloudflareProvider('test', 'email', 'token')
 

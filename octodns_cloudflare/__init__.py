@@ -339,6 +339,9 @@ class CloudflareProvider(BaseProvider):
             values = defaultdict(lambda: defaultdict(list))
             for record in records:
                 if 'targets' in record:
+                    # We shouldn't get in here when pagerules are disabled as
+                    # we won't make the call to fetch the details/them
+                    #
                     # assumption, targets will always contain 1 target
                     # API documentation only indicates 'url' as the only target
                     # if record['targets'][0]['target'] == 'url':
