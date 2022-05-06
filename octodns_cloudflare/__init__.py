@@ -42,14 +42,14 @@ class CloudflareProvider(BaseProvider):
     SUPPORTS_GEO = False
     SUPPORTS_DYNAMIC = False
     SUPPORTS = set(('ALIAS', 'A', 'AAAA', 'CAA', 'CNAME', 'LOC', 'MX', 'NS',
-                    'PTR', 'SRV', 'SPF', 'TXT', 'URLFWD'))
+                    'PTR', 'SRV', 'SPF', 'TXT'))
 
     MIN_TTL = 120
     TIMEOUT = 15
 
-    def __init__(self, id, email=None, token=None, cdn=False, retry_count=4,
-                 retry_period=300, zones_per_page=50, records_per_page=100,
-                 *args, **kwargs):
+    def __init__(self, id, email=None, token=None, cdn=False, pagerules=True,
+                 retry_count=4, retry_period=300, zones_per_page=50,
+                 records_per_page=100, *args, **kwargs):
         self.log = getLogger(f'CloudflareProvider[{id}]')
         self.log.debug('__init__: id=%s, email=%s, token=***, cdn=%s', id,
                        email, cdn)
@@ -68,6 +68,7 @@ class CloudflareProvider(BaseProvider):
                 'Authorization': f'Bearer {token}',
             })
         self.cdn = cdn
+        self.pagerules = pagerules
         self.retry_count = retry_count
         self.retry_period = retry_period
         self.zones_per_page = zones_per_page
@@ -76,6 +77,12 @@ class CloudflareProvider(BaseProvider):
 
         self._zones = None
         self._zone_records = {}
+        if self.pagerules:
+            # copy the class static/ever present list of supported types into
+            # an instance property so that when we modify it we won't change
+            # the shared version
+            self.SUPPORTS = set(self.SUPPORTS)
+            self.SUPPORTS.add('URLFWD')
 
     def _try_request(self, *args, **kwargs):
         tries = self.retry_count
@@ -286,13 +293,14 @@ class CloudflareProvider(BaseProvider):
                     page += 1
                 else:
                     page = None
-
-            path = f'/zones/{zone_id}/pagerules'
-            resp = self._try_request('GET', path, params={'status': 'active'})
-            for r in resp['result']:
-                # assumption, base on API guide, will only contain 1 action
-                if r['actions'][0]['id'] == 'forwarding_url':
-                    records += [r]
+            if self.pagerules:
+                path = f'/zones/{zone_id}/pagerules'
+                resp = self._try_request('GET', path,
+                                         params={'status': 'active'})
+                for r in resp['result']:
+                    # assumption, base on API guide, will only contain 1 action
+                    if r['actions'][0]['id'] == 'forwarding_url':
+                        records += [r]
 
             self._zone_records[zone.name] = records
 
@@ -331,6 +339,9 @@ class CloudflareProvider(BaseProvider):
             values = defaultdict(lambda: defaultdict(list))
             for record in records:
                 if 'targets' in record:
+                    # We shouldn't get in here when pagerules are disabled as
+                    # we won't make the call to fetch the details/them
+                    #
                     # assumption, targets will always contain 1 target
                     # API documentation only indicates 'url' as the only target
                     # if record['targets'][0]['target'] == 'url':
@@ -753,7 +764,7 @@ class CloudflareProvider(BaseProvider):
         existing_type = 'CNAME' if existing._type == 'ALIAS' \
             else existing._type
         for record in self.zone_records(existing.zone):
-            if 'targets' in record:
+            if 'targets' in record and self.pagerules:
                 uri = record['targets'][0]['constraint']['value']
                 uri = '//' + uri if not uri.startswith('http') else uri
                 parsed_uri = urlsplit(uri)
