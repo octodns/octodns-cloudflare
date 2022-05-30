@@ -46,6 +46,8 @@ providers:
     #
     # See: https://support.cloudflare.com/hc/en-us/articles/115000830351
     #cdn: false
+    # Manage Page Rules (URLFWD) records
+    # pagerules: true
     # Optional. Default: 4. Number of times to retry if a 429 response
     # is received.
     #retry_count: 4
