@@ -17,5 +17,4 @@ fi
 
 SOURCES="octodns_cloudflare/*.py setup.py tests/*.py"
 
-pycodestyle --ignore=E221,E241,E251,E722,E741,W504 $SOURCES
 pyflakes $SOURCES
