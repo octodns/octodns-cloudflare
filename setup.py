@@ -32,30 +32,23 @@ def version():
 
 description, long_description = descriptions()
 
-tests_require = (
-    'pytest',
-    'pytest-cov',
-    'pytest-network',
-    'requests_mock',
-)
+tests_require = ('pytest', 'pytest-cov', 'pytest-network', 'requests_mock')
 
 setup(
     author='Ross McFarland',
     author_email='rwmcfa1@gmail.com',
     description=description,
     extras_require={
-        'dev': tests_require + (
+        'dev': tests_require
+        + (
+            'black>=22.3.0',
             'build>=0.7.0',
-            'pycodestyle>=2.6.0',
             'pyflakes>=2.2.0',
             'readme_renderer[md]>=26.0',
             'twine>=3.4.2',
-        ),
+        )
     },
-    install_requires=(
-        'octodns>=0.9.14',
-        'requests>=2.27.0'
-    ),
+    install_requires=('octodns>=0.9.14', 'requests>=2.27.0'),
     license='MIT',
     long_description=long_description,
     long_description_content_type='text/markdown',
