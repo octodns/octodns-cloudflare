@@ -217,7 +217,7 @@ class CloudflareProvider(BaseProvider):
         return {
             'ttl': self._ttl_data(only['ttl']),
             'type': _type,
-            'value': f'{only["content"]}.',
+            'value': f'{only["content"]}.' if only['content'] != '.' else '.',
         }
 
     _data_for_ALIAS = _data_for_CNAME
@@ -253,7 +253,12 @@ class CloudflareProvider(BaseProvider):
         values = []
         for r in records:
             values.append(
-                {'preference': r['priority'], 'exchange': f'{r["content"]}.'}
+                {
+                    'preference': r['priority'],
+                    'exchange': f'{r["content"]}.'
+                    if r['content'] != '.'
+                    else '.',
+                }
             )
         return {
             'ttl': self._ttl_data(records[0]['ttl']),
