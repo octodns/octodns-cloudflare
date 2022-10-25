@@ -193,15 +193,15 @@ class TestCloudflareProvider(TestCase):
             # records
             base = f'{base}/dns_records'
             with open(
-                'tests/fixtures/cloudflare-dns_records-' 'page-1.json'
+                'tests/fixtures/cloudflare-dns_records-page-1.json'
             ) as fh:
                 mock.get(f'{base}?page=1', status_code=200, text=fh.read())
             with open(
-                'tests/fixtures/cloudflare-dns_records-' 'page-2.json'
+                'tests/fixtures/cloudflare-dns_records-page-2.json'
             ) as fh:
                 mock.get(f'{base}?page=2', status_code=200, text=fh.read())
             with open(
-                'tests/fixtures/cloudflare-dns_records-' 'page-3.json'
+                'tests/fixtures/cloudflare-dns_records-page-3.json'
             ) as fh:
                 mock.get(f'{base}?page=3', status_code=200, text=fh.read())
 
@@ -471,7 +471,7 @@ class TestCloudflareProvider(TestCase):
             [
                 call(
                     'DELETE',
-                    '/zones/42/' 'pagerules/2a9141b18ffb0e6aed826050eec970b8',
+                    '/zones/42/pagerules/2a9141b18ffb0e6aed826050eec970b8',
                 ),
                 call(
                     'DELETE',
@@ -485,7 +485,7 @@ class TestCloudflareProvider(TestCase):
                 ),
                 call(
                     'PUT',
-                    '/zones/42/dns_records/' 'fc12ab34cd5611334422ab3322997655',
+                    '/zones/42/dns_records/fc12ab34cd5611334422ab3322997655',
                     data={
                         'content': '3.2.3.4',
                         'type': 'A',
@@ -496,7 +496,7 @@ class TestCloudflareProvider(TestCase):
                 ),
                 call(
                     'PUT',
-                    '/zones/42/pagerules/' '2a9140b17ffb0e6aed826049eec970b7',
+                    '/zones/42/pagerules/2a9140b17ffb0e6aed826049eec970b7',
                     data={
                         'targets': [
                             {
@@ -620,7 +620,7 @@ class TestCloudflareProvider(TestCase):
                 ),
                 call(
                     'PUT',
-                    '/zones/42/dns_records/' 'fc12ab34cd5611334422ab3322997654',
+                    '/zones/42/dns_records/fc12ab34cd5611334422ab3322997654',
                     data={
                         'content': '2.2.2.2',
                         'type': 'A',
@@ -631,7 +631,7 @@ class TestCloudflareProvider(TestCase):
                 ),
                 call(
                     'PUT',
-                    '/zones/42/dns_records/' 'fc12ab34cd5611334422ab3322997653',
+                    '/zones/42/dns_records/fc12ab34cd5611334422ab3322997653',
                     data={
                         'content': '3.3.3.3',
                         'type': 'A',
@@ -821,7 +821,7 @@ class TestCloudflareProvider(TestCase):
                 ),
                 call(
                     'PUT',
-                    '/zones/42/dns_records/' 'fc12ab34cd5611334422ab3322997654',
+                    '/zones/42/dns_records/fc12ab34cd5611334422ab3322997654',
                     data={
                         'content': 'ns2.foo.bar.',
                         'type': 'NS',
@@ -831,11 +831,11 @@ class TestCloudflareProvider(TestCase):
                 ),
                 call(
                     'DELETE',
-                    '/zones/42/dns_records/' 'fc12ab34cd5611334422ab3322997653',
+                    '/zones/42/dns_records/fc12ab34cd5611334422ab3322997653',
                 ),
                 call(
                     'PUT',
-                    '/zones/42/pagerules/' '2a9140b17ffb0e6aed826049eec974b7',
+                    '/zones/42/pagerules/2a9140b17ffb0e6aed826049eec974b7',
                     data={
                         'targets': [
                             {
@@ -860,7 +860,7 @@ class TestCloudflareProvider(TestCase):
                 ),
                 call(
                     'DELETE',
-                    '/zones/42/pagerules/' '2a9141b18ffb0e6aed826054eec970b8',
+                    '/zones/42/pagerules/2a9141b18ffb0e6aed826054eec970b8',
                 ),
             ]
         )

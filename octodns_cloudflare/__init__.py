@@ -22,7 +22,7 @@ class CloudflareError(ProviderException):
             message = data['errors'][0]['message']
         except (IndexError, KeyError, TypeError):
             message = 'Cloudflare error'
-        super(CloudflareError, self).__init__(message)
+        super().__init__(message)
 
 
 class CloudflareAuthenticationError(CloudflareError):
@@ -79,7 +79,7 @@ class CloudflareProvider(BaseProvider):
         self.log.debug(
             '__init__: id=%s, email=%s, token=***, cdn=%s', id, email, cdn
         )
-        super(CloudflareProvider, self).__init__(id, *args, **kwargs)
+        super().__init__(id, *args, **kwargs)
 
         sess = Session()
         if email and token:
