@@ -46,7 +46,8 @@ setup(
             'pyflakes>=2.2.0',
             'readme_renderer[md]>=26.0',
             'twine>=3.4.2',
-        )
+        ),
+        'test': tests_require,
     },
     install_requires=('octodns>=0.9.14', 'requests>=2.27.0'),
     license='MIT',
