@@ -219,7 +219,9 @@ class TestCloudflareProvider(TestCase):
         self.assertEqual(19, len(again.records))
 
     def test_apply(self):
-        provider = CloudflareProvider('test', 'email', 'token', retry_period=0)
+        provider = CloudflareProvider(
+            'test', 'email', 'token', retry_period=0, strict_supports=False
+        )
 
         provider._request = Mock()
 
