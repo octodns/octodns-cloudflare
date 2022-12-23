@@ -54,6 +54,7 @@ class CloudflareProvider(BaseProvider):
             'PTR',
             'SRV',
             'SPF',
+            'TLSA',
             'TXT',
         )
     )
@@ -290,6 +291,24 @@ class CloudflareProvider(BaseProvider):
         return {
             'type': _type,
             'ttl': self._ttl_data(records[0]['ttl']),
+            'values': values,
+        }
+
+    def _data_for_TLSA(self, _type, records):
+        values = []
+        for r in records:
+            data = r['data']
+            values.append(
+                {
+                    'certificate_usage': data['usage'],
+                    'selector': data['selector'],
+                    'matching_type': data['matching_type'],
+                    'certificate_association_data': data['certificate'],
+                }
+            )
+        return {
+            'ttl': self._ttl_data(records[0]['ttl']),
+            'type': _type,
             'values': values,
         }
 
@@ -543,6 +562,17 @@ class CloudflareProvider(BaseProvider):
                 }
             }
 
+    def _contents_for_TLSA(self, record):
+        for value in record.values:
+            yield {
+                'data': {
+                    'usage': value.certificate_usage,
+                    'selector': value.selector,
+                    'matching_type': value.matching_type,
+                    'certificate': value.certificate_association_data,
+                }
+            }
+
     def _contents_for_URLFWD(self, record):
         name = record.fqdn[:-1]
         for value in record.values:
@@ -647,6 +677,13 @@ class CloudflareProvider(BaseProvider):
                 f'{long_seconds} {long_direction} {altitude} {size} '
                 f'{precision_horz} {precision_vert}'
             )
+        elif _type == 'TLSA':
+            data = data['data']
+            usage = data['usage']
+            selector = data['selector']
+            matching_type = data['matching_type']
+            certificate = data['certificate']
+            return f'{usage} {selector} {matching_type} {certificate}'
         elif _type == 'URLFWD':
             uri = data['targets'][0]['constraint']['value']
             uri = '//' + uri if not uri.startswith('http') else uri
