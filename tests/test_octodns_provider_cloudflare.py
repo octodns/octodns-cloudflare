@@ -1836,3 +1836,59 @@ class TestCloudflareProvider(TestCase):
         self.assertEqual(120, provider._ttl_data(120))
         self.assertEqual(3600, provider._ttl_data(3600))
         self.assertEqual(300, provider._ttl_data(1))
+
+    def test_tlsa(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+
+        cf_data = {
+            'comment': None,
+            'content': '1 1 1 aa424242424242424242424242424242',
+            'created_on': '2022-12-23T01:57:14.567985Z',
+            'data': {
+                'certificate': 'aa424242424242424242424242424242',
+                'matching_type': 1,
+                'selector': 1,
+                'usage': 1,
+            },
+            'id': '42998ac69fc4a95cc5c85be9bef2dfbe',
+            'locked': False,
+            'meta': {
+                'auto_added': False,
+                'managed_by_apps': False,
+                'managed_by_argo_tunnel': False,
+                'source': 'primary',
+            },
+            'modified_on': '2022-12-23T01:57:14.567985Z',
+            'name': 'tlsa.unit.tests',
+            'proxiable': False,
+            'proxied': False,
+            'tags': [],
+            'ttl': 1,
+            'type': 'TLSA',
+            'zone_id': 'caf91197cc7930c33b741ec30d29d909',
+            'zone_name': 'unit.tests',
+        }
+        data = provider._data_for_TLSA('TLSA', [cf_data])
+        self.assertEqual(
+            {
+                'ttl': 300,
+                'type': 'TLSA',
+                'values': [
+                    {
+                        'certificate_association_data': 'aa424242424242424242424242424242',
+                        'certificate_usage': 1,
+                        'matching_type': 1,
+                        'selector': 1,
+                    }
+                ],
+            },
+            data,
+        )
+
+        zone = Zone('unit.tests.', [])
+        record = Record.new(zone, 'tlsa', data)
+        contents = list(provider._contents_for_TLSA(record))
+        self.assertEqual([{'data': cf_data['data']}], contents)
+
+        key = provider._gen_key(cf_data)
+        self.assertEqual('1 1 1 aa424242424242424242424242424242', key)
