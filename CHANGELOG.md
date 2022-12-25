@@ -1,7 +1,7 @@
-## v0.0.2 - 2022-??-?? -
+## v0.0.2 - 2022-12-25 - Holiday Edition
 
 * Added support for TLSA record type
-* switched to pytest and updated everything to latest template setup
+* Switched to pytest and updated everything to latest template setup
 
 ## v0.0.1 - 2022-01-05 - Moving
 
