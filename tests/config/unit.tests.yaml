@@ -149,10 +149,6 @@ ptr:
   ttl: 300
   type: PTR
   values: [foo.bar.com.]
-spf:
-  ttl: 600
-  type: SPF
-  value: v=spf1 ip4:192.168.0.1/16-all
 sub:
   type: 'NS'
   values:

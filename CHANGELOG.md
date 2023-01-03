@@ -1,3 +1,8 @@
+## v0.0.3 - 2022-??-?? -
+
+* SPF records can no longer be created,
+  https://github.com/octodns/octodns-cloudflare/issues/28
+
 ## v0.0.2 - 2022-12-25 - Holiday Edition
 
 * Added support for TLSA record type

@@ -8,7 +8,8 @@ from requests_mock import ANY, mock as requests_mock
 from unittest import TestCase
 from unittest.mock import Mock, call
 
-from octodns.record import Record, Update
+from octodns.record import Create, Delete, Record, Update
+from octodns.provider import SupportsException
 from octodns.provider.base import Plan
 from octodns.provider.yaml import YamlProvider
 from octodns.zone import Zone
@@ -211,7 +212,8 @@ class TestCloudflareProvider(TestCase):
 
             changes = self.expected.changes(zone, provider)
 
-            self.assertEqual(4, len(changes))
+            # delete a urlfwd, create 3 urlfwd, and create 1 spf
+            self.assertEqual(5, len(changes))
 
         # re-populating the same zone/records comes out of cache, no calls
         again = Zone('unit.tests.', [])
@@ -234,8 +236,8 @@ class TestCloudflareProvider(TestCase):
 
         # non-existent zone, create everything
         plan = provider.plan(self.expected)
-        self.assertEqual(17, len(plan.changes))
-        self.assertEqual(17, provider.apply(plan))
+        self.assertEqual(16, len(plan.changes))
+        self.assertEqual(16, provider.apply(plan))
         self.assertFalse(plan.exists)
 
         provider._request.assert_has_calls(
@@ -299,7 +301,7 @@ class TestCloudflareProvider(TestCase):
             True,
         )
         # expected number of total calls
-        self.assertEqual(29, provider._request.call_count)
+        self.assertEqual(28, provider._request.call_count)
 
         provider._request.reset_mock()
 
@@ -1892,3 +1894,27 @@ class TestCloudflareProvider(TestCase):
 
         key = provider._gen_key(cf_data)
         self.assertEqual('1 1 1 aa424242424242424242424242424242', key)
+
+    def test_no_spf_create(self):
+        provider = CloudflareProvider('test', 'email', 'token', retry_period=0)
+
+        zone = Zone('unit.tests.', [])
+        a = Record.new(zone, 'a', {'type': 'A', 'ttl': 42, 'value': '1.2.3.4'})
+        spf = Record.new(
+            zone, 'spf', {'type': 'SPF', 'ttl': 43, 'value': 'blahblah'}
+        )
+
+        # A is always included
+        self.assertTrue(provider._include_change(Create(a)))
+        self.assertTrue(provider._include_change(Update(a, a)))
+        self.assertTrue(provider._include_change(Delete(a)))
+
+        # SPF can't be created, updates and deletes are OK
+        with self.assertRaises(SupportsException) as ctx:
+            provider._include_change(Create(spf))
+        self.assertEqual(
+            'test: creating new SPF records not supported, use TXT instead',
+            str(ctx.exception),
+        )
+        self.assertTrue(provider._include_change(Update(spf, spf)))
+        self.assertTrue(provider._include_change(Delete(spf)))
