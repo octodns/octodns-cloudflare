@@ -50,6 +50,7 @@ class CloudflareProvider(BaseProvider):
             'CNAME',
             'LOC',
             'MX',
+            'NAPTR',
             'NS',
             'PTR',
             'SRV',
@@ -259,6 +260,26 @@ class CloudflareProvider(BaseProvider):
                     'exchange': f'{r["content"]}.'
                     if r['content'] != '.'
                     else '.',
+                }
+            )
+        return {
+            'ttl': self._ttl_data(records[0]['ttl']),
+            'type': _type,
+            'values': values,
+        }
+
+    def _data_for_NAPTR(self, _type, records):
+        values = []
+        for r in records:
+            data = r['data']
+            values.append(
+                {
+                    'flags': data['flags'],
+                    'order': data['order'],
+                    'preference': data['preference'],
+                    'regexp': data['regex'],
+                    'replacement': data['replacement'],
+                    'service': data['service'],
                 }
             )
         return {
@@ -538,6 +559,19 @@ class CloudflareProvider(BaseProvider):
         for value in record.values:
             yield {'priority': value.preference, 'content': value.exchange}
 
+    def _contents_for_NAPTR(self, record):
+        for value in record.values:
+            yield {
+                'data': {
+                    'flags': value.flags,
+                    'order': value.order,
+                    'preference': value.preference,
+                    'regex': value.regexp,
+                    'replacement': value.replacement,
+                    'service': value.service,
+                }
+            }
+
     def _contents_for_SRV(self, record):
         try:
             service, proto, subdomain = record.name.split('.', 2)
@@ -681,6 +715,15 @@ class CloudflareProvider(BaseProvider):
                 f'{long_seconds} {long_direction} {altitude} {size} '
                 f'{precision_horz} {precision_vert}'
             )
+        elif _type == 'NAPTR':
+            data = data['data']
+            flags = data['flags']
+            order = data['order']
+            preference = data['preference']
+            regex = data['regex']
+            replacement = data['replacement']
+            service = data['service']
+            return f'{order} {preference} "{flags}" "{service}" "{regex}" {replacement}'
         elif _type == 'TLSA':
             data = data['data']
             usage = data['usage']

@@ -208,17 +208,17 @@ class TestCloudflareProvider(TestCase):
 
             zone = Zone('unit.tests.', [])
             provider.populate(zone)
-            self.assertEqual(19, len(zone.records))
+            self.assertEqual(20, len(zone.records))
 
             changes = self.expected.changes(zone, provider)
 
             # delete a urlfwd, create 3 urlfwd, and create 1 spf
-            self.assertEqual(5, len(changes))
+            self.assertEqual(6, len(changes))
 
         # re-populating the same zone/records comes out of cache, no calls
         again = Zone('unit.tests.', [])
         provider.populate(again)
-        self.assertEqual(19, len(again.records))
+        self.assertEqual(20, len(again.records))
 
     def test_apply(self):
         provider = CloudflareProvider(
@@ -232,12 +232,12 @@ class TestCloudflareProvider(TestCase):
             {'result': {'id': 42}},  # zone create
         ] + [
             None
-        ] * 27  # individual record creates
+        ] * 29  # individual record creates
 
         # non-existent zone, create everything
         plan = provider.plan(self.expected)
-        self.assertEqual(16, len(plan.changes))
-        self.assertEqual(16, provider.apply(plan))
+        self.assertEqual(18, len(plan.changes))
+        self.assertEqual(18, provider.apply(plan))
         self.assertFalse(plan.exists)
 
         provider._request.assert_has_calls(
@@ -301,7 +301,7 @@ class TestCloudflareProvider(TestCase):
             True,
         )
         # expected number of total calls
-        self.assertEqual(28, provider._request.call_count)
+        self.assertEqual(31, provider._request.call_count)
 
         provider._request.reset_mock()
 
@@ -1022,6 +1022,67 @@ class TestCloudflareProvider(TestCase):
             },
             list(loc_record_contents)[0],
         )
+
+    def test_naptr(self):
+        self.maxDiff = None
+        provider = CloudflareProvider('test', 'email', 'token')
+
+        cf_data = {
+            'comment': None,
+            'content': '20 100 "S" "SIP+D2U" "" _sip._udp.unit.tests.',
+            'created_on': '2023-01-08T01:02:34.567985Z',
+            'data': {
+                'flags': 'S',
+                'order': 20,
+                'preference': 100,
+                'regex': '',
+                'replacement': '_sip._udp.unit.tests.',
+                'service': 'SIP+D2U',
+            },
+            'id': '8b60c8518d09465ffc7741b7a4a431f98',
+            'locked': False,
+            'meta': {
+                'auto_added': False,
+                'managed_by_apps': False,
+                'managed_by_argo_tunnel': False,
+                'source': 'primary',
+            },
+            'modified_on': '2023-01-08T01:02:34.567985Z',
+            'name': 'naptr.unit.tests',
+            'proxiable': False,
+            'proxied': False,
+            'tags': [],
+            'ttl': 1,
+            'type': 'NAPTR',
+            'zone_id': 'd515defe41b173bee9488d9a4b5f5de9f',
+            'zone_name': 'unit.tests',
+        }
+        data = provider._data_for_NAPTR('NAPTR', [cf_data])
+        self.assertEqual(
+            {
+                'ttl': 300,
+                'type': 'NAPTR',
+                'values': [
+                    {
+                        'flags': 'S',
+                        'order': 20,
+                        'preference': 100,
+                        'regexp': '',
+                        'replacement': '_sip._udp.unit.tests.',
+                        'service': 'SIP+D2U',
+                    }
+                ],
+            },
+            data,
+        )
+
+        zone = Zone('unit.tests.', [])
+        record = Record.new(zone, 'naptr', data)
+        contents = list(provider._contents_for_NAPTR(record))
+        self.assertEqual([{'data': cf_data['data']}], contents)
+
+        key = provider._gen_key(cf_data)
+        self.assertEqual('20 100 "S" "SIP+D2U" "" _sip._udp.unit.tests.', key)
 
     def test_srv(self):
         provider = CloudflareProvider('test', 'email', 'token')
