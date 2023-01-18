@@ -213,7 +213,7 @@ class TestCloudflareProvider(TestCase):
             changes = self.expected.changes(zone, provider)
 
             # delete a urlfwd, create 3 urlfwd, and create 1 spf
-            self.assertEqual(6, len(changes))
+            self.assertEqual(7, len(changes))
 
         # re-populating the same zone/records comes out of cache, no calls
         again = Zone('unit.tests.', [])
@@ -236,8 +236,8 @@ class TestCloudflareProvider(TestCase):
 
         # non-existent zone, create everything
         plan = provider.plan(self.expected)
-        self.assertEqual(18, len(plan.changes))
-        self.assertEqual(18, provider.apply(plan))
+        self.assertEqual(17, len(plan.changes))
+        self.assertEqual(17, provider.apply(plan))
         self.assertFalse(plan.exists)
 
         provider._request.assert_has_calls(
@@ -301,7 +301,7 @@ class TestCloudflareProvider(TestCase):
             True,
         )
         # expected number of total calls
-        self.assertEqual(31, provider._request.call_count)
+        self.assertEqual(30, provider._request.call_count)
 
         provider._request.reset_mock()
 
