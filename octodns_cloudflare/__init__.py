@@ -9,8 +9,8 @@ from requests import Session
 from time import sleep
 from urllib.parse import urlsplit
 
-from octodns.record import Record, Update
-from octodns.provider import ProviderException
+from octodns.record import Create, Record, Update
+from octodns.provider import ProviderException, SupportsException
 from octodns.provider.base import BaseProvider
 
 __VERSION__ = '0.0.2'
@@ -476,6 +476,10 @@ class CloudflareProvider(BaseProvider):
         return exists
 
     def _include_change(self, change):
+        if isinstance(change, Create) and change.new._type == 'SPF':
+            msg = f'{self.id}: creating new SPF records not supported, use TXT instead'
+            raise SupportsException(msg)
+
         if isinstance(change, Update):
             new = change.new.data
 
