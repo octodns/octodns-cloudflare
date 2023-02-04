@@ -3,15 +3,17 @@
 #
 
 from os.path import dirname, join
-from requests import HTTPError
-from requests_mock import ANY, mock as requests_mock
 from unittest import TestCase
 from unittest.mock import Mock, call
 
-from octodns.record import Create, Delete, Record, Update
+from requests import HTTPError
+from requests_mock import ANY
+from requests_mock import mock as requests_mock
+
 from octodns.provider import SupportsException
 from octodns.provider.base import Plan
 from octodns.provider.yaml import YamlProvider
+from octodns.record import Create, Delete, Record, Update
 from octodns.zone import Zone
 
 from octodns_cloudflare import CloudflareProvider, CloudflareRateLimitError

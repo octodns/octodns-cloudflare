@@ -5,13 +5,14 @@
 from collections import defaultdict
 from copy import deepcopy
 from logging import getLogger
-from requests import Session
 from time import sleep
 from urllib.parse import urlsplit
 
-from octodns.record import Create, Record, Update
+from requests import Session
+
 from octodns.provider import ProviderException, SupportsException
 from octodns.provider.base import BaseProvider
+from octodns.record import Create, Record, Update
 
 __VERSION__ = '0.0.2'
 

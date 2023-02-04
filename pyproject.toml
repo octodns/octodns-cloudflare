@@ -1,0 +1,14 @@
+[tool.black]
+line-length=80
+skip-string-normalization=true
+skip-magic-trailing-comma=true
+
+[tool.isort]
+profile = "black"
+known_first_party="octodns_cloudflare"
+known_octodns="octodns"
+line_length=80
+sections="FUTURE,STDLIB,THIRDPARTY,OCTODNS,FIRSTPARTY,LOCALFOLDER"
+
+[tool.pytest.ini_options]
+pythonpath = "."
