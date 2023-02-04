@@ -1,6 +1,7 @@
 from os import environ
-from setuptools import find_packages, setup
 from subprocess import CalledProcessError, check_output
+
+from setuptools import find_packages, setup
 
 
 def descriptions():
