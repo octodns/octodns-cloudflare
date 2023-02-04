@@ -17,6 +17,4 @@ fi
 export CLOUDFLARE_EMAIL=
 export CLOUDFLARE_TOKEN=
 
-export PYTHONPATH=.:$PYTHONPATH
-
 pytest --disable-network "$@"
