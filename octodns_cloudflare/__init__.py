@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 
 from requests import Session
 
+from octodns import __VERSION__ as octodns_version
 from octodns.provider import ProviderException, SupportsException
 from octodns.provider.base import BaseProvider
 from octodns.record import Create, Record, Update
@@ -91,6 +92,11 @@ class CloudflareProvider(BaseProvider):
             # https://api.cloudflare.com/#getting-started-requests
             # https://tools.ietf.org/html/rfc6750#section-2.1
             sess.headers.update({'Authorization': f'Bearer {token}'})
+        sess.headers.update(
+            {
+                'User-Agent': f'octodns/{octodns_version} octodns-cloudflare/{__VERSION__}'
+            }
+        )
         self.cdn = cdn
         self.pagerules = pagerules
         self.retry_count = retry_count
