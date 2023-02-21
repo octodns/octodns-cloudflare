@@ -1834,6 +1834,7 @@ class TestCloudflareProvider(TestCase):
         provider = CloudflareProvider('test', token='token 123')
         headers = provider._sess.headers
         self.assertEqual('Bearer token 123', headers['Authorization'])
+        self.assertTrue(headers['user-agent'])
 
     def test_retry_behavior(self):
         provider = CloudflareProvider(
