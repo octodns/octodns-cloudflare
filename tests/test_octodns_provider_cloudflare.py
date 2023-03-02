@@ -1992,8 +1992,8 @@ class TestCloudflareProvider(TestCase):
             'content': '1 2 859be6ed04643db411f067b6c1da1d75fe08b672',
             'created_on': '2023-03-02T01:02:44.567985Z',
             'data': {
-                'algorithm': '1',
-                'fingerprint_type': '2',
+                'algorithm': 1,
+                'type': 2,
                 'fingerprint': '859be6ed04643db411f067b6c1da1d75fe08b672',
             },
             'id': 'ggozrtnzb11nrr9qs4ko6y3j19qkehux9',
@@ -2021,8 +2021,8 @@ class TestCloudflareProvider(TestCase):
                 'type': 'SSHFP',
                 'values': [
                     {
-                        'algorithm': '1',
-                        'fingerprint_type': '2',
+                        'algorithm': 1,
+                        'fingerprint_type': 2,
                         'fingerprint': '859be6ed04643db411f067b6c1da1d75fe08b672',
                     }
                 ],

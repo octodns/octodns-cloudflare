@@ -367,8 +367,8 @@ class CloudflareProvider(BaseProvider):
             )
             values.append(
                 {
-                    'algorithm': algorithm,
-                    'fingerprint_type': fingerprint_type,
+                    'algorithm': int(algorithm),
+                    'fingerprint_type': int(fingerprint_type),
                     'fingerprint': fingerprint,
                 }
             )
@@ -603,8 +603,8 @@ class CloudflareProvider(BaseProvider):
         for value in record.values:
             yield {
                 'data': {
-                    'algorithm': f'{value.algorithm}',
-                    'fingerprint_type': f'{value.fingerprint_type}',
+                    'algorithm': value.algorithm,
+                    'type': value.fingerprint_type,
                     'fingerprint': value.fingerprint,
                 }
             }
@@ -764,7 +764,7 @@ class CloudflareProvider(BaseProvider):
         elif _type == 'SSHFP':
             data = data['data']
             algorithm = data['algorithm']
-            fingerprint_type = data['fingerprint_type']
+            fingerprint_type = data['type']
             fingerprint = data['fingerprint']
             return f'{algorithm} {fingerprint_type} {fingerprint}'
         elif _type == 'TLSA':
