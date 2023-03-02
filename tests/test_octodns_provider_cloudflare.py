@@ -210,17 +210,17 @@ class TestCloudflareProvider(TestCase):
 
             zone = Zone('unit.tests.', [])
             provider.populate(zone)
-            self.assertEqual(20, len(zone.records))
+            self.assertEqual(21, len(zone.records))
 
             changes = self.expected.changes(zone, provider)
 
             # delete a urlfwd, create 3 urlfwd, and create 1 spf
-            self.assertEqual(7, len(changes))
+            self.assertEqual(8, len(changes))
 
         # re-populating the same zone/records comes out of cache, no calls
         again = Zone('unit.tests.', [])
         provider.populate(again)
-        self.assertEqual(20, len(again.records))
+        self.assertEqual(21, len(again.records))
 
     def test_apply(self):
         provider = CloudflareProvider(
@@ -234,12 +234,12 @@ class TestCloudflareProvider(TestCase):
             {'result': {'id': 42}},  # zone create
         ] + [
             None
-        ] * 29  # individual record creates
+        ] * 30  # individual record creates
 
         # non-existent zone, create everything
         plan = provider.plan(self.expected)
-        self.assertEqual(17, len(plan.changes))
-        self.assertEqual(17, provider.apply(plan))
+        self.assertEqual(18, len(plan.changes))
+        self.assertEqual(18, provider.apply(plan))
         self.assertFalse(plan.exists)
 
         provider._request.assert_has_calls(
@@ -303,7 +303,7 @@ class TestCloudflareProvider(TestCase):
             True,
         )
         # expected number of total calls
-        self.assertEqual(30, provider._request.call_count)
+        self.assertEqual(32, provider._request.call_count)
 
         provider._request.reset_mock()
 
@@ -1982,3 +1982,58 @@ class TestCloudflareProvider(TestCase):
         )
         self.assertTrue(provider._include_change(Update(spf, spf)))
         self.assertTrue(provider._include_change(Delete(spf)))
+
+    def test_sshfp(self):
+        self.maxDiff = None
+        provider = CloudflareProvider('test', 'email', 'token')
+
+        cf_data = {
+            'comment': None,
+            'content': '1 2 859be6ed04643db411f067b6c1da1d75fe08b672',
+            'created_on': '2023-03-02T01:02:44.567985Z',
+            'data': {
+                'algorithm': '1',
+                'fingerprint_type': '2',
+                'fingerprint': '859be6ed04643db411f067b6c1da1d75fe08b672',
+            },
+            'id': 'ggozrtnzb11nrr9qs4ko6y3j19qkehux9',
+            'locked': False,
+            'meta': {
+                'auto_added': False,
+                'managed_by_apps': False,
+                'managed_by_argo_tunnel': False,
+                'source': 'primary',
+            },
+            'modified_on': '2023-03-02T01:02:44.567985Z',
+            'name': 'naptr.unit.tests',
+            'proxiable': False,
+            'proxied': False,
+            'tags': [],
+            'ttl': 300,
+            'type': 'SSHFP',
+            'zone_id': 'ff12ab34cd5611334422ab3322997650',
+            'zone_name': 'unit.tests',
+        }
+        data = provider._data_for_SSHFP('SSHFP', [cf_data])
+        self.assertEqual(
+            {
+                'ttl': 300,
+                'type': 'SSHFP',
+                'values': [
+                    {
+                        'algorithm': '1',
+                        'fingerprint_type': '2',
+                        'fingerprint': '859be6ed04643db411f067b6c1da1d75fe08b672',
+                    }
+                ],
+            },
+            data,
+        )
+
+        zone = Zone('unit.tests.', [])
+        record = Record.new(zone, 'sshfp', data)
+        contents = list(provider._contents_for_SSHFP(record))
+        self.assertEqual([{'data': cf_data['data']}], contents)
+
+        key = provider._gen_key(cf_data)
+        self.assertEqual('1 2 859be6ed04643db411f067b6c1da1d75fe08b672', key)

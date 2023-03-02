@@ -141,14 +141,39 @@
         "managed_by_argo_tunnel": false,
         "source": "primary"
       }
+    },
+    {
+      "id": "ggozrtnzb11nrr9qs4ko6y3j19qkehux9",
+      "type": "SSHFP",
+      "name": "unit.tests",
+      "content": "1 2 859be6ed04643db411f067b6c1da1d75fe08b672",
+      "proxiable": false,
+      "proxied": false,
+      "ttl": 300,
+      "locked": false,
+      "zone_id": "ff12ab34cd5611334422ab3322997650",
+      "zone_name": "unit.tests",
+      "created_on": "2023-03-02T01:02:44.567985Z",
+      "modified_on": "2023-03-02T01:02:44.567985Z",
+      "data": {
+        "algorithm": "1",
+        "fingerprint_type": "2",
+        "fingerprint": "859be6ed04643db411f067b6c1da1d75fe08b672"
+      },
+      "meta": {
+        "auto_added": false,
+        "managed_by_apps": false,
+        "managed_by_argo_tunnel": false,
+        "source": "primary"
+      }
     }
   ],
   "result_info": {
     "page": 3,
     "per_page": 10,
     "total_pages": 3,
-    "count": 5,
-    "total_count": 25
+    "count": 6,
+    "total_count": 26
   },
   "success": true,
   "errors": [],
