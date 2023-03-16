@@ -55,6 +55,7 @@ class CloudflareProvider(BaseProvider):
             'NAPTR',
             'NS',
             'PTR',
+            'SSHFP',
             'SRV',
             'SPF',
             'TLSA',
@@ -358,6 +359,25 @@ class CloudflareProvider(BaseProvider):
             'values': values,
         }
 
+    def _data_for_SSHFP(self, _type, records):
+        values = []
+        for record in records:
+            algorithm, fingerprint_type, fingerprint = record['content'].split(
+                ' ', 2
+            )
+            values.append(
+                {
+                    'algorithm': int(algorithm),
+                    'fingerprint_type': int(fingerprint_type),
+                    'fingerprint': fingerprint,
+                }
+            )
+        return {
+            'type': _type,
+            'values': values,
+            'ttl': self._ttl_data(records[0]['ttl']),
+        }
+
     def zone_records(self, zone):
         if zone.name not in self._zone_records:
             zone_id = self.zones.get(zone.name, False)
@@ -579,6 +599,16 @@ class CloudflareProvider(BaseProvider):
                 }
             }
 
+    def _contents_for_SSHFP(self, record):
+        for value in record.values:
+            yield {
+                'data': {
+                    'algorithm': value.algorithm,
+                    'type': value.fingerprint_type,
+                    'fingerprint': value.fingerprint,
+                }
+            }
+
     def _contents_for_SRV(self, record):
         try:
             service, proto, subdomain = record.name.split('.', 2)
@@ -731,6 +761,12 @@ class CloudflareProvider(BaseProvider):
             replacement = data['replacement']
             service = data['service']
             return f'{order} {preference} "{flags}" "{service}" "{regex}" {replacement}'
+        elif _type == 'SSHFP':
+            data = data['data']
+            algorithm = data['algorithm']
+            fingerprint_type = data['type']
+            fingerprint = data['fingerprint']
+            return f'{algorithm} {fingerprint_type} {fingerprint}'
         elif _type == 'TLSA':
             data = data['data']
             usage = data['usage']
