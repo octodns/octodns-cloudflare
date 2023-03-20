@@ -178,9 +178,9 @@
   "result_info": {
     "page": 1,
     "per_page": 10,
-    "total_pages": 2,
+    "total_pages": 3,
     "count": 10,
-    "total_count": 20
+    "total_count": 27
   },
   "success": true,
   "errors": [],
