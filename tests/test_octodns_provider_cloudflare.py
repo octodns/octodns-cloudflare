@@ -2047,7 +2047,7 @@ class TestCloudflareProvider(TestCase):
         # existing zone with data
         with requests_mock() as mock:
             base = 'https://api.cloudflare.com/client/v4/zones'
-            idna_zone_id='234234243423aaabb334342bbb343433'
+            idna_zone_id = '234234243423aaabb334342bbb343433'
             # zone for idna zone is in page 3
             with open('tests/fixtures/cloudflare-zones-page-3.json') as fh:
                 mock.get(f'{base}?page=1', status_code=200, text=fh.read())
@@ -2056,7 +2056,11 @@ class TestCloudflareProvider(TestCase):
             with open(
                 'tests/fixtures/cloudflare-dns_records-page-3.json'
             ) as fh:
-                mock.get(f'{base}/dns_records?page=1', status_code=200, text=fh.read())
+                mock.get(
+                    f'{base}/dns_records?page=1',
+                    status_code=200,
+                    text=fh.read(),
+                )
             # load page rules for idna zone
             with open('tests/fixtures/cloudflare-pagerules.json') as fh:
                 mock.get(
