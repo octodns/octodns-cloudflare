@@ -11,10 +11,10 @@ from urllib.parse import urlsplit
 from requests import Session
 
 from octodns import __VERSION__ as octodns_version
+from octodns.idna import IdnaDict
 from octodns.provider import ProviderException, SupportsException
 from octodns.provider.base import BaseProvider
 from octodns.record import Create, Record, Update
-from octodns.idna import idna_decode
 
 __VERSION__ = '0.0.2'
 
@@ -175,7 +175,7 @@ class CloudflareProvider(BaseProvider):
                 else:
                     page = None
 
-            self._zones = {f'{idna_decode(z["name"])}.': z['id'] for z in zones}
+            self._zones = IdnaDict({f'{z["name"]}.': z['id'] for z in zones})
 
         return self._zones
 
@@ -380,8 +380,8 @@ class CloudflareProvider(BaseProvider):
         }
 
     def zone_records(self, zone):
-        if idna_decode(zone.name) not in self._zone_records:
-            zone_id = self.zones.get(idna_decode(zone.name), False)
+        if zone.name not in self._zone_records:
+            zone_id = self.zones.get(zone.name, False)
             if not zone_id:
                 return []
 
@@ -410,9 +410,9 @@ class CloudflareProvider(BaseProvider):
                     if r['actions'][0]['id'] == 'forwarding_url':
                         records += [r]
 
-            self._zone_records[idna_decode(zone.name)] = records
+            self._zone_records[zone.name] = records
 
-        return self._zone_records[idna_decode(zone.name)]
+        return self._zone_records[zone.name]
 
     def _record_for(self, zone, name, _type, records, lenient):
         # rewrite Cloudflare proxied records
