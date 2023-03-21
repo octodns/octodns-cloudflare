@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 from requests import Session
 
 from octodns import __VERSION__ as octodns_version
+from octodns.idna import IdnaDict
 from octodns.provider import ProviderException, SupportsException
 from octodns.provider.base import BaseProvider
 from octodns.record import Create, Record, Update
@@ -174,7 +175,7 @@ class CloudflareProvider(BaseProvider):
                 else:
                     page = None
 
-            self._zones = {f'{z["name"]}.': z['id'] for z in zones}
+            self._zones = IdnaDict({f'{z["name"]}.': z['id'] for z in zones})
 
         return self._zones
 

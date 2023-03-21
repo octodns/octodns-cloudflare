@@ -10,6 +10,7 @@ from requests import HTTPError
 from requests_mock import ANY
 from requests_mock import mock as requests_mock
 
+from octodns.idna import idna_encode
 from octodns.provider import SupportsException
 from octodns.provider.base import Plan
 from octodns.provider.yaml import YamlProvider
@@ -177,8 +178,10 @@ class TestCloudflareProvider(TestCase):
                 mock.get(f'{base}?page=1', status_code=200, text=fh.read())
             with open('tests/fixtures/cloudflare-zones-page-2.json') as fh:
                 mock.get(f'{base}?page=2', status_code=200, text=fh.read())
+            with open('tests/fixtures/cloudflare-zones-page-3.json') as fh:
+                mock.get(f'{base}?page=3', status_code=200, text=fh.read())
             mock.get(
-                f'{base}?page=3',
+                f'{base}?page=4',
                 status_code=200,
                 json={'result': [], 'result_info': {'count': 0, 'per_page': 0}},
             )
@@ -210,17 +213,17 @@ class TestCloudflareProvider(TestCase):
 
             zone = Zone('unit.tests.', [])
             provider.populate(zone)
-            self.assertEqual(21, len(zone.records))
+            self.assertEqual(22, len(zone.records))
 
             changes = self.expected.changes(zone, provider)
 
             # delete a urlfwd, create 3 urlfwd, and create 1 spf
-            self.assertEqual(8, len(changes))
+            self.assertEqual(9, len(changes))
 
         # re-populating the same zone/records comes out of cache, no calls
         again = Zone('unit.tests.', [])
         provider.populate(again)
-        self.assertEqual(21, len(again.records))
+        self.assertEqual(22, len(again.records))
 
     def test_apply(self):
         provider = CloudflareProvider(
@@ -2037,3 +2040,37 @@ class TestCloudflareProvider(TestCase):
 
         key = provider._gen_key(cf_data)
         self.assertEqual('1 2 859be6ed04643db411f067b6c1da1d75fe08b672', key)
+
+    def test_idna_domain(self):
+        self.maxDiff = None
+        provider = CloudflareProvider('test', 'email', 'token')
+        # existing zone with data
+        with requests_mock() as mock:
+            base = 'https://api.cloudflare.com/client/v4/zones'
+            idna_zone_id = '234234243423aaabb334342bbb343433'
+            # zone for idna zone is in page 3
+            with open('tests/fixtures/cloudflare-zones-page-3.json') as fh:
+                mock.get(f'{base}?page=1', status_code=200, text=fh.read())
+            # records for idna zone is in page 3
+            base = f'{base}/{idna_zone_id}'
+            with open(
+                'tests/fixtures/cloudflare-dns_records-page-3.json'
+            ) as fh:
+                mock.get(
+                    f'{base}/dns_records?page=1',
+                    status_code=200,
+                    text=fh.read(),
+                )
+            # load page rules for idna zone
+            with open('tests/fixtures/cloudflare-pagerules.json') as fh:
+                mock.get(
+                    f'{base}/pagerules?status=active',
+                    status_code=200,
+                    text=fh.read(),
+                )
+
+            # notice the i is a utf-8 character which becomes `xn--gthub-zsa.com.`
+            zone = Zone('gíthub.com.', [])
+            provider.populate(zone)
+        self.assertEqual(8, len(zone.records))
+        self.assertEqual(zone.name, idna_encode('gíthub.com.'))
