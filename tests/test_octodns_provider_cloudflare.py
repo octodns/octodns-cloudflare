@@ -2085,6 +2085,7 @@ class TestCloudflareProvider(TestCase):
             'email',
             'token',
             account_id='334234243423aaabb334342aaa343433',
+            strict_supports=False,
         )
 
         provider._request = Mock(status_code=200)

@@ -171,7 +171,7 @@ class CloudflareProvider(BaseProvider):
             while page:
                 params = {'page': page, 'per_page': self.zones_per_page}
                 if self.account_id is not None:
-                    params.update({'account.id': self.account_id})
+                    params['account.id'] = self.account_id
                 resp = self._try_request('GET', '/zones', params=params)
                 zones += resp['result']
                 info = resp['result_info']
