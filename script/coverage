@@ -22,6 +22,7 @@ grep -r -I --line-number "# pragma: +no.*cover" $SOURCE_DIR && {
   exit 1
 }
 
+export CLOUDFLARE_ACCOUNT_ID=
 export CLOUDFLARE_EMAIL=
 export CLOUDFLARE_TOKEN=
 

@@ -1259,7 +1259,9 @@ class TestCloudflareProvider(TestCase):
             self.assertEqual(expected, provider._gen_key(data))
 
     def test_cdn(self):
-        provider = CloudflareProvider('test', 'email', 'token', True)
+        provider = CloudflareProvider(
+            'test', 'email', 'token', 'account_id', True
+        )
 
         # A CNAME for us to transform to ALIAS
         provider.zone_records = Mock(
@@ -1406,7 +1408,9 @@ class TestCloudflareProvider(TestCase):
         self.assertEqual(1, len(plan.changes))
 
     def test_cdn_alias(self):
-        provider = CloudflareProvider('test', 'email', 'token', True)
+        provider = CloudflareProvider(
+            'test', 'email', 'token', 'account_id', True
+        )
 
         # A CNAME for us to transform to ALIAS
         provider.zone_records = Mock(
@@ -2074,3 +2078,33 @@ class TestCloudflareProvider(TestCase):
             provider.populate(zone)
         self.assertEqual(8, len(zone.records))
         self.assertEqual(zone.name, idna_encode('gíthub.com.'))
+
+    def test_account_id_filter(self):
+        provider = CloudflareProvider(
+            'test',
+            'email',
+            'token',
+            account_id='334234243423aaabb334342aaa343433',
+            strict_supports=False,
+        )
+
+        provider._request = Mock(status_code=200)
+        provider._request.side_effect = [
+            self.empty,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ]
+
+        provider.plan(self.expected)
+        provider._request.assert_called_with(
+            'GET',
+            '/zones',
+            params={
+                'page': 1,
+                'per_page': 50,
+                'account.id': '334234243423aaabb334342aaa343433',
+            },
+        )

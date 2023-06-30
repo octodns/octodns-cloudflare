@@ -14,6 +14,7 @@ if [ ! -f "$ACTIVATE" ]; then
 fi
 . "$ACTIVATE"
 
+export CLOUDFLARE_ACCOUNT_ID=
 export CLOUDFLARE_EMAIL=
 export CLOUDFLARE_TOKEN=
 
