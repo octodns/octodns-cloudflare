@@ -72,6 +72,7 @@ class CloudflareProvider(BaseProvider):
         id,
         email=None,
         token=None,
+        account_id=None,
         cdn=False,
         pagerules=True,
         retry_count=4,
@@ -83,7 +84,11 @@ class CloudflareProvider(BaseProvider):
     ):
         self.log = getLogger(f'CloudflareProvider[{id}]')
         self.log.debug(
-            '__init__: id=%s, email=%s, token=***, cdn=%s', id, email, cdn
+            '__init__: id=%s, email=%s, token=***, account_id=%s, cdn=%s',
+            id,
+            email,
+            account_id,
+            cdn,
         )
         super().__init__(id, *args, **kwargs)
 
@@ -99,6 +104,7 @@ class CloudflareProvider(BaseProvider):
                 'User-Agent': f'octodns/{octodns_version} octodns-cloudflare/{__VERSION__}'
             }
         )
+        self.account_id = account_id
         self.cdn = cdn
         self.pagerules = pagerules
         self.retry_count = retry_count
@@ -163,11 +169,10 @@ class CloudflareProvider(BaseProvider):
             page = 1
             zones = []
             while page:
-                resp = self._try_request(
-                    'GET',
-                    '/zones',
-                    params={'page': page, 'per_page': self.zones_per_page},
-                )
+                params = {'page': page, 'per_page': self.zones_per_page}
+                if self.account_id is not None:
+                    params.update({'account.id': self.account_id})
+                resp = self._try_request('GET', '/zones', params=params)
                 zones += resp['result']
                 info = resp['result_info']
                 if info['count'] > 0 and info['count'] == info['per_page']:

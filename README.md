@@ -40,6 +40,9 @@ providers:
     # Your Cloudflare account email address (required, optional if using token)
     email: env/CLOUDFLARE_EMAIL
     token: env/CLOUDFLARE_TOKEN
+    # Optional. Filter by account ID in environments where a token has access
+    # across more than the permitted number of accounts allowed by Cloudflare.
+    account_id: env/CLOUDFLARE_ACCOUNT_ID
     # Import CDN enabled records as CNAME to {}.cdn.cloudflare.net. Records
     # ending at .cdn.cloudflare.net. will be ignored when this provider is
     # not used as the source and the cdn option is enabled.
