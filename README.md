@@ -36,9 +36,10 @@ octodns-cloudflare==0.0.1
 providers:
   cloudflare:
     class: octodns_cloudflare.CloudflareProvider
-    # The api key (required)
     # Your Cloudflare account email address (required, optional if using token)
     email: env/CLOUDFLARE_EMAIL
+    # The API Token or API Key.
+    # Required permissions for API Tokens are Zone:Read, DNS:Read and DNS:Key.
     token: env/CLOUDFLARE_TOKEN
     # Optional. Filter by account ID in environments where a token has access
     # across more than the permitted number of accounts allowed by Cloudflare.
@@ -87,6 +88,10 @@ CloudflareProvider does not supports root NS record management. They can partial
 #### Dynamic
 
 CloudflareProvider does not support dynamic records.
+
+#### Required API Token Permissions
+
+Required Permissions for API Token are Zone:Read, DNS:Read, and DNS:Edit.
 
 ### Developement
 
