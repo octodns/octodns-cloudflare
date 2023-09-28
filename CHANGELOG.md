@@ -1,7 +1,11 @@
-## v0.0.3 - 2022-??-?? -
+## v0.0.3 - 2023-09-20 - All the commits fit to release
 
 * SPF records can no longer be created,
   https://github.com/octodns/octodns-cloudflare/issues/28
+* NAPTR and SSHFP support added
+* All HTTP requests include a meaningful user-agent.
+* AccountID filter support
+* API token auth method/doc
 
 ## v0.0.2 - 2022-12-25 - Holiday Edition
 

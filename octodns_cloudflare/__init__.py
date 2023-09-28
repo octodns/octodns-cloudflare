@@ -16,7 +16,7 @@ from octodns.provider import ProviderException, SupportsException
 from octodns.provider.base import BaseProvider
 from octodns.record import Create, Record, Update
 
-__VERSION__ = '0.0.2'
+__VERSION__ = '0.0.3'
 
 
 class CloudflareError(ProviderException):
