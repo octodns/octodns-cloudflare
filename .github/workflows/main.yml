@@ -7,8 +7,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Tested versions based on dates in https://devguide.python.org/versions/#versions
-        python-version: ['3.8', '3.9', '3.10', '3.11']
+        python-version: ${{fromJson(vars.PYTHON_VERSIONS_ACTIVE)}}
     steps:
       - uses: actions/checkout@v4
       - name: Setup python
@@ -26,7 +25,7 @@ jobs:
       - name: Setup python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: ${{ vars.PYTHON_VERSION_CURRENT }}
           architecture: x64
       - name: CI setup.py
         run: |
