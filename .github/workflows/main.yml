@@ -11,7 +11,7 @@ jobs:
       run: |
         {
           echo 'json<<EOF'
-          curl -L https://github.com/octodns/octodns/raw/python-matrix-json/.ci-config.json
+          curl -L https://github.com/octodns/octodns/raw/main/.ci-config.json
           echo EOF
         } >> $GITHUB_OUTPUT
   ci:
