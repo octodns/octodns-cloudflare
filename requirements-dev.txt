@@ -33,5 +33,7 @@ requests-mock==1.11.0
 requests-toolbelt==1.0.0
 rfc3986==2.0.0
 rich==13.6.0
+setuptools==68.2.2
 twine==4.0.2
+wheel==0.41.2
 zipp==3.17.0
