@@ -440,6 +440,9 @@ class CloudflareProvider(BaseProvider):
 
         return record
 
+    def list_zones(self):
+        return sorted(self.zones.keys())
+
     def populate(self, zone, target=False, lenient=False):
         self.log.debug(
             'populate: name=%s, target=%s, lenient=%s',

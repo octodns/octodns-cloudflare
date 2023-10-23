@@ -2108,3 +2108,39 @@ class TestCloudflareProvider(TestCase):
                 'account.id': '334234243423aaabb334342aaa343433',
             },
         )
+
+    def test_list_zones(self):
+        provider = CloudflareProvider(
+            'test',
+            'email',
+            'token',
+            account_id='334234243423aaabb334342aaa343433',
+        )
+
+        # existing zone with data
+        with requests_mock() as mock:
+            base = 'https://api.cloudflare.com/client/v4/zones'
+
+            # zones
+            with open('tests/fixtures/cloudflare-zones-page-1.json') as fh:
+                mock.get(f'{base}?page=1', status_code=200, text=fh.read())
+            with open('tests/fixtures/cloudflare-zones-page-2.json') as fh:
+                mock.get(f'{base}?page=2', status_code=200, text=fh.read())
+            with open('tests/fixtures/cloudflare-zones-page-3.json') as fh:
+                mock.get(f'{base}?page=3', status_code=200, text=fh.read())
+            mock.get(
+                f'{base}?page=4',
+                status_code=200,
+                json={'result': [], 'result_info': {'count': 0, 'per_page': 0}},
+            )
+
+            self.assertEqual(
+                [
+                    'github.com.',
+                    'github.io.',
+                    'githubusercontent.com.',
+                    'unit.tests.',
+                    'xn--gthub-zsa.com.',
+                ],
+                provider.list_zones(),
+            )

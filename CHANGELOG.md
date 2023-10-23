@@ -1,3 +1,8 @@
+## v0.0.4 - 2023-??-?? - Know your zones
+
+* Support for Provider.list_zones to enable dynamic zone config when operating
+  as a source
+
 ## v0.0.3 - 2023-09-20 - All the commits fit to release
 
 * SPF records can no longer be created,
