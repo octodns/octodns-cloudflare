@@ -421,7 +421,8 @@ class CloudflareProvider(BaseProvider):
 
     def _record_for(self, zone, name, _type, records, lenient):
         # rewrite Cloudflare proxied records
-        if self.cdn and records[0]['proxied']:
+        proxied = records[0].get('proxied', False)
+        if self.cdn and proxied:
             data = self._data_for_cdn(name, _type, records)
         else:
             # Cloudflare supports ALIAS semantics with root CNAMEs
@@ -433,10 +434,16 @@ class CloudflareProvider(BaseProvider):
 
         record = Record.new(zone, name, data, source=self, lenient=lenient)
 
+        auto_ttl = records[0]['ttl'] == 1
         if _type in _PROXIABLE_RECORD_TYPES:
             record._octodns['cloudflare'] = {
-                'proxied': records[0].get('proxied', False)
+                'proxied': proxied,
+                'auto-ttl': auto_ttl,
             }
+        else:
+            # auto-ttl can still be set, signaled by a ttl=1, even if
+            # proxied is false or if the record isn't even a proxyable type
+            record._octodns['cloudflare'] = {'auto-ttl': auto_ttl}
 
         return record
 
@@ -520,8 +527,12 @@ class CloudflareProvider(BaseProvider):
             new = change.new.data
 
             # Cloudflare manages TTL of proxied records, so we should exclude
-            # TTL from the comparison (to prevent false-positives).
+            # TTL from the comparison (to prevent false-positives), this is even
+            # true of non-proxied records when auto-ttl is enabled
             if self._record_is_proxied(change.existing):
+                existing = deepcopy(change.existing.data)
+                existing.update({'ttl': new['ttl']})
+            elif self._record_is_just_auto_ttl(change.existing):
                 existing = deepcopy(change.existing.data)
                 existing.update({'ttl': new['ttl']})
             elif change.new._type == 'URLFWD':
@@ -687,10 +698,24 @@ class CloudflareProvider(BaseProvider):
             'proxied', False
         )
 
+    def _record_is_just_auto_ttl(self, record):
+        'This tests if it is strictly auto-ttl and not proxied'
+        return (
+            not self._record_is_proxied(record)
+            and not self.cdn
+            and record._octodns.get('cloudflare', {}).get('auto-ttl', False)
+        )
+
     def _gen_data(self, record):
         name = record.fqdn[:-1]
         _type = record._type
-        ttl = max(self.MIN_TTL, record.ttl)
+        proxied = self._record_is_proxied(record)
+        if proxied or self._record_is_just_auto_ttl(record):
+            # proxied implies auto-ttl, and auto-ttl can be enabled on its own,
+            # when either is the case we tell Cloudflare with ttl=1
+            ttl = 1
+        else:
+            ttl = max(self.MIN_TTL, record.ttl)
 
         # Cloudflare supports ALIAS semantics with a root CNAME
         if _type == 'ALIAS':
@@ -1007,9 +1032,13 @@ class CloudflareProvider(BaseProvider):
             elif desired_record in changed_records:  # Already being updated
                 continue
 
-            if self._record_is_proxied(
-                existing_record
-            ) != self._record_is_proxied(desired_record):
+            if (
+                self._record_is_proxied(existing_record)
+                != self._record_is_proxied(desired_record)
+            ) or (
+                self._record_is_just_auto_ttl(existing_record)
+                != self._record_is_just_auto_ttl(desired_record)
+            ):
                 extra_changes.append(Update(existing_record, desired_record))
 
         return extra_changes

@@ -70,6 +70,23 @@ name:
     octodns:
         cloudflare:
             proxied: true
+            # auto-ttl true is implied by proxied true, but can be explicitly
+            # configured to be more complete
+            #auto-ttl: true
+    # with proxied=true, the TTL here will be ignored by CloudflareProvider
+    ttl: 120
+    type: A
+    value: 1.2.3.4
+```
+
+Note: All record types support "auto" ttl, which is effecitvely equivilent to 300s.
+
+```yaml
+name:
+    octodns:
+        cloudflare:
+            auto-ttl: true
+    # with proxied=true, the TTL here will be ignored by CloudflareProvider
     ttl: 120
     type: A
     value: 1.2.3.4

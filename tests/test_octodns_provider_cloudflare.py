@@ -29,6 +29,15 @@ def set_record_proxied_flag(record, proxied):
     return record
 
 
+def set_record_auto_ttl_flag(record, auto_ttl):
+    try:
+        record._octodns['cloudflare']['auto-ttl'] = auto_ttl
+    except KeyError:
+        record._octodns['cloudflare'] = {'auto-ttl': auto_ttl}
+
+    return record
+
+
 class TestCloudflareProvider(TestCase):
     expected = Zone('unit.tests.', [])
     source = YamlProvider('test', join(dirname(__file__), 'config'))
@@ -1487,7 +1496,8 @@ class TestCloudflareProvider(TestCase):
 
         record = provider._record_for(zone, name, _type, zone_records, False)
 
-        self.assertFalse('cloudflare' in record._octodns)
+        self.assertFalse(record._octodns.get('auto-ttl', False))
+        self.assertFalse(record._octodns.get('proxied', False))
 
     def test_proxiabletype_recordfor_retrecordwithcloudflareunproxied(self):
         provider = CloudflareProvider('test', 'email', 'token')
@@ -1530,7 +1540,7 @@ class TestCloudflareProvider(TestCase):
                 "content": "::1",
                 "proxiable": True,
                 "proxied": True,
-                "ttl": 300,
+                "ttl": 1,
                 "locked": False,
                 "zone_id": "ff12ab34cd5611334422ab3322997650",
                 "zone_name": "unit.tests",
@@ -1545,6 +1555,7 @@ class TestCloudflareProvider(TestCase):
 
         record = provider._record_for(zone, name, _type, zone_records, False)
 
+        self.assertTrue(record._octodns['cloudflare']['auto-ttl'])
         self.assertTrue(record._octodns['cloudflare']['proxied'])
 
     def test_proxiedrecordandnewttl_includechange_returnsfalse(self):
@@ -1568,6 +1579,33 @@ class TestCloudflareProvider(TestCase):
         include_change = provider._include_change(change)
 
         self.assertFalse(include_change)
+
+    def test_auto_ttl_ignores_ttl_change(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        zone = Zone('unit.tests.', [])
+        existing = set_record_auto_ttl_flag(
+            Record.new(
+                zone,
+                'a',
+                {'ttl': 1, 'type': 'A', 'values': ['1.1.1.1', '2.2.2.2']},
+            ),
+            True,
+        )
+        new = Record.new(
+            zone,
+            'a',
+            {'ttl': 300, 'type': 'A', 'values': ['1.1.1.1', '2.2.2.2']},
+        )
+        change = Update(existing, new)
+
+        include_change = provider._include_change(change)
+
+        self.assertFalse(include_change)
+
+        # if flag is false, would return the change
+        existing = set_record_auto_ttl_flag(existing, False)
+        include_change = provider._include_change(change)
+        self.assertTrue(include_change)
 
     def test_unproxiabletype_gendata_returnsnoproxied(self):
         provider = CloudflareProvider('test', 'email', 'token')

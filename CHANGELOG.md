@@ -2,6 +2,8 @@
 
 * Support for Provider.list_zones to enable dynamic zone config when operating
   as a source
+* Support for auto-ttl without proxied as records can be configured that way,
+  see auto-ttl in README.md for more info
 
 ## v0.0.3 - 2023-09-20 - All the commits fit to release
 
