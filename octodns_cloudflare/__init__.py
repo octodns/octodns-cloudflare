@@ -436,11 +436,15 @@ class CloudflareProvider(BaseProvider):
 
         auto_ttl = records[0]['ttl'] == 1
         if _type in _PROXIABLE_RECORD_TYPES:
+            self.log.debug(
+                '_record_for: proxied=%s, auto_ttl=%s', proxied, auto_ttl
+            )
             record._octodns['cloudflare'] = {
                 'proxied': proxied,
                 'auto-ttl': auto_ttl,
             }
         else:
+            self.log.debug('_record_for: auto_ttl=%s', auto_ttl)
             # auto-ttl can still be set, signaled by a ttl=1, even if
             # proxied is false or if the record isn't even a proxyable type
             record._octodns['cloudflare'] = {'auto-ttl': auto_ttl}
