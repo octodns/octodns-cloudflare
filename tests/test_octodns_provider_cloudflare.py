@@ -947,9 +947,6 @@ class TestCloudflareProvider(TestCase):
         provider.pagerules = True
         # plan again, this time we expect both calls and a record
         plan = provider.plan(zone)
-        from pprint import pprint
-
-        pprint({'plan': plan, 'changes': plan.changes})
         self.assertEqual(1, len(plan.changes))
         change = list(plan.changes)[0]
         self.assertEqual('URLFWD', change.record._type)
