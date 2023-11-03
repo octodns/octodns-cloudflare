@@ -3,7 +3,6 @@
 #
 
 from collections import defaultdict
-from copy import deepcopy
 from logging import getLogger
 from time import sleep
 from urllib.parse import urlsplit
@@ -528,24 +527,40 @@ class CloudflareProvider(BaseProvider):
             raise SupportsException(msg)
 
         if isinstance(change, Update):
-            new = change.new.data
+            new = change.new
+            new_is_proxied = self._record_is_proxied(new)
+            new_is_just_auto_ttl = self._record_is_just_auto_ttl(new)
+            new_is_urlfwd = new._type == 'URLFWD'
+            new = new.data
 
-            # Cloudflare manages TTL of proxied records, so we should exclude
-            # TTL from the comparison (to prevent false-positives), this is even
-            # true of non-proxied records when auto-ttl is enabled
-            if self._record_is_proxied(change.existing):
-                existing = deepcopy(change.existing.data)
-                existing.update({'ttl': new['ttl']})
-            elif self._record_is_just_auto_ttl(change.existing):
-                existing = deepcopy(change.existing.data)
-                existing.update({'ttl': new['ttl']})
-            elif change.new._type == 'URLFWD':
-                existing = deepcopy(change.existing.data)
-                existing.update({'ttl': new['ttl']})
-            else:
-                existing = change.existing.data
+            existing = change.existing
+            existing_is_proxied = self._record_is_proxied(existing)
+            existing_is_just_auto_ttl = self._record_is_just_auto_ttl(existing)
+            existing_is_urlfwd = existing._type == 'URLFWD'
+            existing = existing.data
 
+            if (
+                (new_is_proxied != existing_is_proxied)
+                or (new_is_just_auto_ttl != existing_is_just_auto_ttl)
+                or (new_is_urlfwd != existing_is_urlfwd)
+            ):
+                # changes in special flags, definitely need this change
+                return True
+
+            # at this point we know that all the special flags match in new and
+            # existing so we can focus on the actual record details
+
+            # TTLs are ignored for these, best way to do that is to just copy
+            # it over so they'll match
+            if new_is_proxied or new_is_just_auto_ttl or new_is_urlfwd:
+                new['ttl'] = existing['ttl']
+
+            # Cloudflare has a minimum TTL, we need to clamp the TTL values so
+            # that we ignore a desired state (new) where we can't support the
+            # TTL
             new['ttl'] = max(self.MIN_TTL, new['ttl'])
+            existing['ttl'] = max(self.MIN_TTL, existing['ttl'])
+
             if new == existing:
                 return False
 

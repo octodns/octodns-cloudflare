@@ -1569,10 +1569,13 @@ class TestCloudflareProvider(TestCase):
             ),
             True,
         )
-        new = Record.new(
-            zone,
-            'a',
-            {'ttl': 300, 'type': 'A', 'values': ['1.1.1.1', '2.2.2.2']},
+        new = set_record_proxied_flag(
+            Record.new(
+                zone,
+                'a',
+                {'ttl': 300, 'type': 'A', 'values': ['1.1.1.1', '2.2.2.2']},
+            ),
+            True,
         )
         change = Update(existing, new)
 
@@ -1591,10 +1594,13 @@ class TestCloudflareProvider(TestCase):
             ),
             True,
         )
-        new = Record.new(
-            zone,
-            'a',
-            {'ttl': 300, 'type': 'A', 'values': ['1.1.1.1', '2.2.2.2']},
+        new = set_record_auto_ttl_flag(
+            Record.new(
+                zone,
+                'a',
+                {'ttl': 300, 'type': 'A', 'values': ['1.1.1.1', '2.2.2.2']},
+            ),
+            True,
         )
         change = Update(existing, new)
 
@@ -2008,25 +2014,31 @@ class TestCloudflareProvider(TestCase):
         provider = CloudflareProvider('test', 'email', 'token', retry_period=0)
 
         zone = Zone('unit.tests.', [])
-        a = Record.new(zone, 'a', {'type': 'A', 'ttl': 42, 'value': '1.2.3.4'})
-        spf = Record.new(
-            zone, 'spf', {'type': 'SPF', 'ttl': 43, 'value': 'blahblah'}
+        a1 = Record.new(
+            zone, 'a', {'type': 'A', 'ttl': 420, 'value': '1.2.3.4'}
         )
+        a2 = a1.copy()
+        a2.ttl += 1
+        spf1 = Record.new(
+            zone, 'spf', {'type': 'SPF', 'ttl': 430, 'value': 'blahblah'}
+        )
+        spf2 = spf1.copy()
+        spf2.ttl += 1
 
         # A is always included
-        self.assertTrue(provider._include_change(Create(a)))
-        self.assertTrue(provider._include_change(Update(a, a)))
-        self.assertTrue(provider._include_change(Delete(a)))
+        self.assertTrue(provider._include_change(Create(a1)))
+        self.assertTrue(provider._include_change(Update(a1, a2)))
+        self.assertTrue(provider._include_change(Delete(a1)))
 
         # SPF can't be created, updates and deletes are OK
         with self.assertRaises(SupportsException) as ctx:
-            provider._include_change(Create(spf))
+            provider._include_change(Create(spf1))
         self.assertEqual(
             'test: creating new SPF records not supported, use TXT instead',
             str(ctx.exception),
         )
-        self.assertTrue(provider._include_change(Update(spf, spf)))
-        self.assertTrue(provider._include_change(Delete(spf)))
+        self.assertTrue(provider._include_change(Update(spf1, spf2)))
+        self.assertTrue(provider._include_change(Delete(spf1)))
 
     def test_sshfp(self):
         self.maxDiff = None
