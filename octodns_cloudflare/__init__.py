@@ -551,8 +551,8 @@ class CloudflareProvider(BaseProvider):
             # at this point we know that all the special flags match in new and
             # existing so we can focus on the actual record details, so we can
             # ignore octodns.cloudflare
-            new['octodns'].pop('cloudflare', None)
-            existing['octodns'].pop('cloudflare', None)
+            new.get('octodns', {}).pop('cloudflare', None)
+            existing.get('octodns', {}).pop('cloudflare', None)
 
             # TTLs are ignored for these, best way to do that is to just copy
             # it over so they'll match
