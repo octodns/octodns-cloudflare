@@ -1617,8 +1617,18 @@ class TestCloudflareProvider(TestCase):
         a1_plain = Record.new(
             zone, 'www', {'ttl': 300, 'type': 'A', 'value': '1.2.3.4'}
         )
-        a1_proxied = set_record_proxied_flag(a1_plain.copy(), True)
-        a1_auto_ttl = set_record_auto_ttl_flag(a1_plain.copy(), True)
+        a1_proxied = set_record_proxied_flag(
+            Record.new(
+                zone, 'www', {'ttl': 300, 'type': 'A', 'value': '1.2.3.4'}
+            ),
+            True,
+        )
+        a1_auto_ttl = set_record_auto_ttl_flag(
+            Record.new(
+                zone, 'www', {'ttl': 300, 'type': 'A', 'value': '1.2.3.4'}
+            ),
+            True,
+        )
 
         # plain <-> proxied
         self.assertTrue(provider._include_change(Update(a1_plain, a1_proxied)))
