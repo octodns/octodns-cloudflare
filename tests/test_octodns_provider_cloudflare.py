@@ -1523,7 +1523,9 @@ class TestCloudflareProvider(TestCase):
 
         record = provider._record_for(zone, name, _type, zone_records, False)
 
-        self.assertFalse(record._octodns['cloudflare']['proxied'])
+        self.assertFalse(
+            record._octodns.get('cloudflare', {}).get('proxied', False)
+        )
 
     def test_proxiabletype_recordfor_returnsrecordwithcloudflareproxied(self):
         provider = CloudflareProvider('test', 'email', 'token')
@@ -1554,6 +1556,34 @@ class TestCloudflareProvider(TestCase):
 
         self.assertTrue(record._octodns['cloudflare']['auto-ttl'])
         self.assertTrue(record._octodns['cloudflare']['proxied'])
+
+    def test_record_for_auto_ttl_no_proxied(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        name = "proxied.unit.tests"
+        _type = "A"
+        zone_records = [
+            {
+                "id": "fc12ab34cd5611334422ab3322997642",
+                "type": _type,
+                "name": name,
+                "content": "4.3.2.1",
+                "proxiable": True,
+                "proxied": False,
+                "ttl": 1,
+                "locked": False,
+                "zone_id": "ff12ab34cd5611334422ab3322997650",
+                "zone_name": "unit.tests",
+                "modified_on": "2017-03-11T18:01:43.420689Z",
+                "created_on": "2017-03-11T18:01:43.420689Z",
+                "meta": {"auto_added": False},
+            }
+        ]
+
+        zone = Zone('unit.tests.', [])
+        record = provider._record_for(zone, name, _type, zone_records, False)
+
+        self.assertTrue(record._octodns['cloudflare']['auto-ttl'])
+        self.assertFalse(record._octodns['cloudflare'].get('proxied', False))
 
     def test_proxiedrecordandnewttl_includechange_returnsfalse(self):
         provider = CloudflareProvider('test', 'email', 'token')
@@ -1907,7 +1937,9 @@ class TestCloudflareProvider(TestCase):
 
         self.assertEqual(1, len(extra_changes))
         self.assertFalse(
-            extra_changes[0].existing._octodns['cloudflare']['proxied']
+            extra_changes[0]
+            .existing._octodns.get('cloudflare', {})
+            .get('proxied', False)
         )
         self.assertTrue(extra_changes[0].new._octodns['cloudflare']['proxied'])
 
@@ -1963,7 +1995,11 @@ class TestCloudflareProvider(TestCase):
         self.assertTrue(
             extra_changes[0].existing._octodns['cloudflare']['proxied']
         )
-        self.assertFalse(extra_changes[0].new._octodns['cloudflare']['proxied'])
+        self.assertFalse(
+            extra_changes[0]
+            .new._octodns.get('cloudflare', {})
+            .get('proxied', False)
+        )
 
     def test_emailless_auth(self):
         provider = CloudflareProvider(
