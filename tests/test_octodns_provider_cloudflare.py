@@ -29,6 +29,15 @@ def set_record_proxied_flag(record, proxied):
     return record
 
 
+def set_record_auto_ttl_flag(record, auto_ttl):
+    try:
+        record._octodns['cloudflare']['auto-ttl'] = auto_ttl
+    except KeyError:
+        record._octodns['cloudflare'] = {'auto-ttl': auto_ttl}
+
+    return record
+
+
 class TestCloudflareProvider(TestCase):
     expected = Zone('unit.tests.', [])
     source = YamlProvider('test', join(dirname(__file__), 'config'))
@@ -938,9 +947,6 @@ class TestCloudflareProvider(TestCase):
         provider.pagerules = True
         # plan again, this time we expect both calls and a record
         plan = provider.plan(zone)
-        from pprint import pprint
-
-        pprint({'plan': plan, 'changes': plan.changes})
         self.assertEqual(1, len(plan.changes))
         change = list(plan.changes)[0]
         self.assertEqual('URLFWD', change.record._type)
@@ -1487,7 +1493,8 @@ class TestCloudflareProvider(TestCase):
 
         record = provider._record_for(zone, name, _type, zone_records, False)
 
-        self.assertFalse('cloudflare' in record._octodns)
+        self.assertFalse(record._octodns.get('auto-ttl', False))
+        self.assertFalse(record._octodns.get('proxied', False))
 
     def test_proxiabletype_recordfor_retrecordwithcloudflareunproxied(self):
         provider = CloudflareProvider('test', 'email', 'token')
@@ -1516,7 +1523,9 @@ class TestCloudflareProvider(TestCase):
 
         record = provider._record_for(zone, name, _type, zone_records, False)
 
-        self.assertFalse(record._octodns['cloudflare']['proxied'])
+        self.assertFalse(
+            record._octodns.get('cloudflare', {}).get('proxied', False)
+        )
 
     def test_proxiabletype_recordfor_returnsrecordwithcloudflareproxied(self):
         provider = CloudflareProvider('test', 'email', 'token')
@@ -1530,7 +1539,7 @@ class TestCloudflareProvider(TestCase):
                 "content": "::1",
                 "proxiable": True,
                 "proxied": True,
-                "ttl": 300,
+                "ttl": 1,
                 "locked": False,
                 "zone_id": "ff12ab34cd5611334422ab3322997650",
                 "zone_name": "unit.tests",
@@ -1545,7 +1554,36 @@ class TestCloudflareProvider(TestCase):
 
         record = provider._record_for(zone, name, _type, zone_records, False)
 
+        self.assertTrue(record._octodns['cloudflare']['auto-ttl'])
         self.assertTrue(record._octodns['cloudflare']['proxied'])
+
+    def test_record_for_auto_ttl_no_proxied(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        name = "proxied.unit.tests"
+        _type = "A"
+        zone_records = [
+            {
+                "id": "fc12ab34cd5611334422ab3322997642",
+                "type": _type,
+                "name": name,
+                "content": "4.3.2.1",
+                "proxiable": True,
+                "proxied": False,
+                "ttl": 1,
+                "locked": False,
+                "zone_id": "ff12ab34cd5611334422ab3322997650",
+                "zone_name": "unit.tests",
+                "modified_on": "2017-03-11T18:01:43.420689Z",
+                "created_on": "2017-03-11T18:01:43.420689Z",
+                "meta": {"auto_added": False},
+            }
+        ]
+
+        zone = Zone('unit.tests.', [])
+        record = provider._record_for(zone, name, _type, zone_records, False)
+
+        self.assertTrue(record._octodns['cloudflare']['auto-ttl'])
+        self.assertFalse(record._octodns['cloudflare'].get('proxied', False))
 
     def test_proxiedrecordandnewttl_includechange_returnsfalse(self):
         provider = CloudflareProvider('test', 'email', 'token')
@@ -1558,16 +1596,143 @@ class TestCloudflareProvider(TestCase):
             ),
             True,
         )
-        new = Record.new(
-            zone,
-            'a',
-            {'ttl': 300, 'type': 'A', 'values': ['1.1.1.1', '2.2.2.2']},
+        new = set_record_proxied_flag(
+            Record.new(
+                zone,
+                'a',
+                {'ttl': 300, 'type': 'A', 'values': ['1.1.1.1', '2.2.2.2']},
+            ),
+            True,
         )
         change = Update(existing, new)
 
         include_change = provider._include_change(change)
 
         self.assertFalse(include_change)
+
+    def test_auto_ttl_ignores_ttl_change(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        zone = Zone('unit.tests.', [])
+        existing = set_record_auto_ttl_flag(
+            Record.new(
+                zone,
+                'a',
+                {'ttl': 1, 'type': 'A', 'values': ['1.1.1.1', '2.2.2.2']},
+            ),
+            True,
+        )
+        new = set_record_auto_ttl_flag(
+            Record.new(
+                zone,
+                'a',
+                {'ttl': 300, 'type': 'A', 'values': ['1.1.1.1', '2.2.2.2']},
+            ),
+            True,
+        )
+        change = Update(existing, new)
+
+        include_change = provider._include_change(change)
+
+        self.assertFalse(include_change)
+
+        # if flag is false, would return the change
+        existing = set_record_auto_ttl_flag(existing, False)
+        include_change = provider._include_change(change)
+        self.assertTrue(include_change)
+
+    def test_include_change_special_flags(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+
+        zone = Zone('unit.tests.', [])
+        a1_plain = Record.new(
+            zone, 'www', {'ttl': 300, 'type': 'A', 'value': '1.2.3.4'}
+        )
+        a1_proxied = set_record_proxied_flag(
+            Record.new(
+                zone, 'www', {'ttl': 300, 'type': 'A', 'value': '1.2.3.4'}
+            ),
+            True,
+        )
+        a1_auto_ttl = set_record_auto_ttl_flag(
+            Record.new(
+                zone, 'www', {'ttl': 300, 'type': 'A', 'value': '1.2.3.4'}
+            ),
+            True,
+        )
+
+        # plain <-> proxied
+        self.assertTrue(provider._include_change(Update(a1_plain, a1_proxied)))
+        self.assertTrue(provider._include_change(Update(a1_proxied, a1_plain)))
+        # plain <-> auto-ttl
+        self.assertTrue(provider._include_change(Update(a1_plain, a1_auto_ttl)))
+        self.assertTrue(provider._include_change(Update(a1_auto_ttl, a1_plain)))
+        # proxied <-> auto-ttl
+        self.assertTrue(
+            provider._include_change(Update(a1_proxied, a1_auto_ttl))
+        )
+        self.assertTrue(
+            provider._include_change(Update(a1_auto_ttl, a1_proxied))
+        )
+
+        # no special flag changes
+        self.assertFalse(provider._include_change(Update(a1_plain, a1_plain)))
+        self.assertFalse(
+            provider._include_change(Update(a1_proxied, a1_proxied))
+        )
+        self.assertFalse(
+            provider._include_change(Update(a1_auto_ttl, a1_auto_ttl))
+        )
+
+    def test_include_change_min_ttl(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+
+        zone = Zone('unit.tests.', [])
+        below1 = Record.new(
+            zone, 'www', {'ttl': 42, 'type': 'A', 'value': '1.2.3.4'}
+        )
+        below2 = Record.new(
+            zone, 'www', {'ttl': 119, 'type': 'A', 'value': '1.2.3.4'}
+        )
+        edge = Record.new(
+            zone, 'www', {'ttl': 120, 'type': 'A', 'value': '1.2.3.4'}
+        )
+        above1 = Record.new(
+            zone, 'www', {'ttl': 121, 'type': 'A', 'value': '1.2.3.4'}
+        )
+        above2 = Record.new(
+            zone, 'www', {'ttl': 500, 'type': 'A', 'value': '1.2.3.4'}
+        )
+
+        # both below
+        self.assertFalse(provider._include_change(Update(below1, below1)))
+        self.assertFalse(provider._include_change(Update(below1, below2)))
+        self.assertFalse(provider._include_change(Update(below2, below1)))
+        self.assertFalse(provider._include_change(Update(below2, below2)))
+
+        # one below, other at
+        self.assertFalse(provider._include_change(Update(below1, edge)))
+        self.assertFalse(provider._include_change(Update(below2, edge)))
+        self.assertFalse(provider._include_change(Update(edge, below1)))
+        self.assertFalse(provider._include_change(Update(edge, below2)))
+
+        # both at
+        self.assertFalse(provider._include_change(Update(edge, edge)))
+
+        # one at, other above
+        self.assertTrue(provider._include_change(Update(edge, above1)))
+        self.assertTrue(provider._include_change(Update(edge, above2)))
+        self.assertTrue(provider._include_change(Update(above1, edge)))
+        self.assertTrue(provider._include_change(Update(above2, edge)))
+
+        # both above
+        self.assertTrue(provider._include_change(Update(above1, above2)))
+        self.assertTrue(provider._include_change(Update(above2, above1)))
+        self.assertFalse(provider._include_change(Update(above1, above1)))
+        self.assertFalse(provider._include_change(Update(above2, above2)))
+
+        # one below, one above
+        self.assertTrue(provider._include_change(Update(below2, above1)))
+        self.assertTrue(provider._include_change(Update(above1, below2)))
 
     def test_unproxiabletype_gendata_returnsnoproxied(self):
         provider = CloudflareProvider('test', 'email', 'token')
@@ -1772,7 +1937,9 @@ class TestCloudflareProvider(TestCase):
 
         self.assertEqual(1, len(extra_changes))
         self.assertFalse(
-            extra_changes[0].existing._octodns['cloudflare']['proxied']
+            extra_changes[0]
+            .existing._octodns.get('cloudflare', {})
+            .get('proxied', False)
         )
         self.assertTrue(extra_changes[0].new._octodns['cloudflare']['proxied'])
 
@@ -1828,7 +1995,11 @@ class TestCloudflareProvider(TestCase):
         self.assertTrue(
             extra_changes[0].existing._octodns['cloudflare']['proxied']
         )
-        self.assertFalse(extra_changes[0].new._octodns['cloudflare']['proxied'])
+        self.assertFalse(
+            extra_changes[0]
+            .new._octodns.get('cloudflare', {})
+            .get('proxied', False)
+        )
 
     def test_emailless_auth(self):
         provider = CloudflareProvider(
@@ -1970,25 +2141,31 @@ class TestCloudflareProvider(TestCase):
         provider = CloudflareProvider('test', 'email', 'token', retry_period=0)
 
         zone = Zone('unit.tests.', [])
-        a = Record.new(zone, 'a', {'type': 'A', 'ttl': 42, 'value': '1.2.3.4'})
-        spf = Record.new(
-            zone, 'spf', {'type': 'SPF', 'ttl': 43, 'value': 'blahblah'}
+        a1 = Record.new(
+            zone, 'a', {'type': 'A', 'ttl': 420, 'value': '1.2.3.4'}
         )
+        a2 = a1.copy()
+        a2.ttl += 1
+        spf1 = Record.new(
+            zone, 'spf', {'type': 'SPF', 'ttl': 430, 'value': 'blahblah'}
+        )
+        spf2 = spf1.copy()
+        spf2.ttl += 1
 
         # A is always included
-        self.assertTrue(provider._include_change(Create(a)))
-        self.assertTrue(provider._include_change(Update(a, a)))
-        self.assertTrue(provider._include_change(Delete(a)))
+        self.assertTrue(provider._include_change(Create(a1)))
+        self.assertTrue(provider._include_change(Update(a1, a2)))
+        self.assertTrue(provider._include_change(Delete(a1)))
 
         # SPF can't be created, updates and deletes are OK
         with self.assertRaises(SupportsException) as ctx:
-            provider._include_change(Create(spf))
+            provider._include_change(Create(spf1))
         self.assertEqual(
             'test: creating new SPF records not supported, use TXT instead',
             str(ctx.exception),
         )
-        self.assertTrue(provider._include_change(Update(spf, spf)))
-        self.assertTrue(provider._include_change(Delete(spf)))
+        self.assertTrue(provider._include_change(Update(spf1, spf2)))
+        self.assertTrue(provider._include_change(Delete(spf1)))
 
     def test_sshfp(self):
         self.maxDiff = None
