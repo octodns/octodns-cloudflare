@@ -11,4 +11,7 @@ line_length=80
 sections="FUTURE,STDLIB,THIRDPARTY,OCTODNS,FIRSTPARTY,LOCALFOLDER"
 
 [tool.pytest.ini_options]
+filterwarnings = [
+    'error',
+]
 pythonpath = "."
