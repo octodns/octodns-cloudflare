@@ -540,6 +540,98 @@ class TestCloudflareProvider(TestCase):
             ]
         )
 
+        # Run the basic apply tests but with an account_id
+        provider = CloudflareProvider(
+            'test',
+            'email',
+            'token',
+            account_id='334234243423aaabb334342aaa343433',
+            retry_period=0,
+            strict_supports=False,
+        )
+
+        provider._request = Mock()
+
+        provider._request.side_effect = [
+            self.empty,  # no zones
+            {'result': {'id': 42}},  # zone create
+        ] + [
+            None
+        ] * 30  # individual record creates
+
+        # non-existent zone, create everything
+        plan = provider.plan(self.expected)
+        self.assertEqual(18, len(plan.changes))
+        self.assertEqual(18, provider.apply(plan))
+        self.assertFalse(plan.exists)
+
+        provider._request.assert_has_calls(
+            [
+                # created the domain
+                call(
+                    'POST',
+                    '/zones',
+                    data={
+                        'jump_start': False,
+                        'name': 'unit.tests',
+                        'account': {'id': '334234243423aaabb334342aaa343433'},
+                    },
+                ),
+                # created at least one of the record with expected data
+                call(
+                    'POST',
+                    '/zones/42/dns_records',
+                    data={
+                        'content': 'ns1.unit.tests.',
+                        'type': 'NS',
+                        'name': 'under.unit.tests',
+                        'ttl': 3600,
+                    },
+                ),
+                # make sure semicolons are not escaped when sending data
+                call(
+                    'POST',
+                    '/zones/42/dns_records',
+                    data={
+                        'content': 'v=DKIM1;k=rsa;s=email;h=sha256;'
+                        'p=A/kinda+of/long/string+with+numb3rs',
+                        'type': 'TXT',
+                        'name': 'txt.unit.tests',
+                        'ttl': 600,
+                    },
+                ),
+                # create at least one pagerules
+                call(
+                    'POST',
+                    '/zones/42/pagerules',
+                    data={
+                        'targets': [
+                            {
+                                'target': 'url',
+                                'constraint': {
+                                    'operator': 'matches',
+                                    'value': 'urlfwd.unit.tests/',
+                                },
+                            }
+                        ],
+                        'actions': [
+                            {
+                                'id': 'forwarding_url',
+                                'value': {
+                                    'url': 'http://www.unit.tests',
+                                    'status_code': 302,
+                                },
+                            }
+                        ],
+                        'status': 'active',
+                    },
+                ),
+            ],
+            True,
+        )
+        # expected number of total calls
+        self.assertEqual(32, provider._request.call_count)
+
     def test_update_add_swap(self):
         provider = CloudflareProvider('test', 'email', 'token', retry_period=0)
 

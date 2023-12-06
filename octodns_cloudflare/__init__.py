@@ -1021,6 +1021,8 @@ class CloudflareProvider(BaseProvider):
         if name not in self.zones:
             self.log.debug('_apply:   no matching zone, creating')
             data = {'name': name[:-1], 'jump_start': False}
+            if self.account_id is not None:
+                data['account'] = {'id': self.account_id}
             resp = self._try_request('POST', '/zones', data=data)
             zone_id = resp['result']['id']
             self.zones[name] = zone_id
