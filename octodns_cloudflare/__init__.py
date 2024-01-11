@@ -214,7 +214,9 @@ class CloudflareProvider(BaseProvider):
         return {
             'ttl': self._ttl_data(records[0]['ttl']),
             'type': _type,
-            'values': [r['content'].replace(';', '\\;') for r in records],
+            'values': [
+                r.get('content', '').replace(';', '\\;') for r in records
+            ],
         }
 
     def _data_for_CAA(self, _type, records):

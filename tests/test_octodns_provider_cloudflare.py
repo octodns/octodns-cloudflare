@@ -1259,6 +1259,25 @@ class TestCloudflareProvider(TestCase):
             list(srv_record_with_sub_contents)[0],
         )
 
+    def test_txt(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+
+        # single record w/content
+        data = provider._data_for_TXT(
+            'TXT', [{'ttl': 42, 'content': 'hello world'}]
+        )
+        self.assertEqual(
+            {'ttl': 42, 'type': 'TXT', 'values': ['hello world']}, data
+        )
+
+        # missing content, equivilent to empty from CF
+        data = provider._data_for_TXT('TXT', [{'ttl': 42}])
+        from pprint import pprint
+
+        pprint(data)
+
+        self.assertEqual({'ttl': 42, 'type': 'TXT', 'values': ['']}, data)
+
     def test_alias(self):
         provider = CloudflareProvider('test', 'email', 'token')
 

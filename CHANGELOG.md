@@ -4,6 +4,7 @@
   as a source
 * Support for auto-ttl without proxied as records can be configured that way,
   see auto-ttl in README.md for more info
+* Fix bug in handling of empty strings/content on TXT records
 
 ## v0.0.3 - 2023-09-20 - All the commits fit to release
 
