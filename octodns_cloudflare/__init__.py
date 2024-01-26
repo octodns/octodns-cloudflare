@@ -64,7 +64,6 @@ class CloudflareProvider(BaseProvider):
         )
     )
 
-    MIN_TTL = 120
     TIMEOUT = 15
 
     def __init__(
@@ -79,6 +78,7 @@ class CloudflareProvider(BaseProvider):
         retry_period=300,
         zones_per_page=50,
         records_per_page=100,
+        min_ttl=120,
         *args,
         **kwargs,
     ):
@@ -111,6 +111,7 @@ class CloudflareProvider(BaseProvider):
         self.retry_period = retry_period
         self.zones_per_page = zones_per_page
         self.records_per_page = records_per_page
+        self.min_ttl = min_ttl
         self._sess = sess
 
         self._zones = None
@@ -560,8 +561,8 @@ class CloudflareProvider(BaseProvider):
             # Cloudflare has a minimum TTL, we need to clamp the TTL values so
             # that we ignore a desired state (new) where we can't support the
             # TTL
-            new['ttl'] = max(self.MIN_TTL, new['ttl'])
-            existing['ttl'] = max(self.MIN_TTL, existing['ttl'])
+            new['ttl'] = max(self.min_ttl, new['ttl'])
+            existing['ttl'] = max(self.min_ttl, existing['ttl'])
 
             if new == existing:
                 return False
@@ -736,7 +737,7 @@ class CloudflareProvider(BaseProvider):
             # when either is the case we tell Cloudflare with ttl=1
             ttl = 1
         else:
-            ttl = max(self.MIN_TTL, record.ttl)
+            ttl = max(self.min_ttl, record.ttl)
 
         # Cloudflare supports ALIAS semantics with a root CNAME
         if _type == 'ALIAS':
