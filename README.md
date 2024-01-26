@@ -61,6 +61,10 @@ providers:
     #zones_per_page: 50
     # Optional. Default: 100. Number of dns records per page.
     #records_per_page: 100
+    # Optional. Default: 120. Lowest TTL allowed to be set.
+    # A different limit for (non-)enterprise zone applies.
+    # See: https://developers.cloudflare.com/dns/manage-dns-records/reference/ttl
+    #min_ttl: 120
 ```
 
 Note: The "proxied" flag of "A", "AAAA" and "CNAME" records can be managed via the YAML provider like so:
@@ -109,6 +113,11 @@ CloudflareProvider does not support dynamic records.
 #### Required API Token Permissions
 
 Required Permissions for API Token are Zone:Read, DNS:Read, and DNS:Edit.
+
+#### TTL
+
+Cloudflare has a different minimum TTL for enterprise and non-enterprise zones. See the [documentation](https://developers.cloudflare.com/dns/manage-dns-records/reference/ttl) for more information.
+In the past the CloudflareProvider had a fixed minimum TTL set to 120 seconds and for backwards compatbility this is the current default.
 
 ### Developement
 
