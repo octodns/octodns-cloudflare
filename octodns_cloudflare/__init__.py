@@ -13,6 +13,7 @@ from octodns import __VERSION__ as octodns_version
 from octodns.idna import IdnaDict
 from octodns.provider import ProviderException, SupportsException
 from octodns.provider.base import BaseProvider
+from octodns.processor.base import BaseProcessor, ProcessorException
 from octodns.record import Create, Record, Update
 
 # TODO: remove __VERSION__ with the next major version release
@@ -1066,3 +1067,83 @@ class CloudflareProvider(BaseProvider):
                 extra_changes.append(Update(existing_record, desired_record))
 
         return extra_changes
+
+class CloudflareException(ProcessorException):
+    pass
+
+class CloudflareProcessor(BaseProcessor):
+    '''
+    Replace Cloudflare proxied values on non Cloudflare providers with the relevant .cdn.cloudflare.net. value.
+
+    Example usage:
+
+    processors:
+        cloudflare:
+            class: octodns_cloudflare.CloudflareProcessor
+
+    ...
+
+    zones:
+        example.com.:
+            ...
+            processors:
+                - cloudflare
+            ...
+    '''
+
+    def __init__(self, name):
+        super().__init__(name)
+
+    def process_source_and_target_zones(self, desired, existing, target):
+
+        # Check if zone is destined for Cloudflare
+        if isinstance(target, CloudflareProvider):
+            # If it is then dont bother with any processing just return now
+            return desired, existing
+
+        for record in desired.records:
+            # Check the record is Cloudflare proxied
+            if record._octodns.get('cloudflare', {}).get('proxied', False):
+
+                # Non Cloudflare proxyable record types
+                # https://developers.cloudflare.com/dns/manage-dns-records/reference/proxied-dns-records/#record-types
+                # NOTE: Inclusion of ALIAS as this is generally a CNAME equivalent that can be used at the root
+                if record._type not in ['ALIAS', 'A', 'AAAA', 'CNAME']:
+                    # Root
+                    if record.name == "":
+                        # Dont delete OR adjust the record - leave as is
+                        continue
+
+                    # NOT Root
+                    else:
+                        # Delete and skip to next record - dont add record
+                        desired.remove_record(record)
+                        continue
+                
+                # Cloudflare proxyable record types
+                else:
+                    # Remove record
+                    desired.remove_record(record)
+
+                    # Root
+                    if record.name == "":
+                        # Replace with ALIAS
+                        type = "ALIAS"
+
+                    # NOT Root
+                    else:
+                        # Replace with CNAME
+                        type = "CNAME"
+
+                # Create new record
+                new = record.new(
+                    desired,
+                    record.name,
+                    {'type': type, 'ttl': record.ttl, 'value': (f"{record.fqdn}cdn.cloudflare.net.")}, # Set the value to Cloudflare CDN value e.g www.example.com.cdn.cloudflare.net.
+                )
+
+                # Replace the record 
+                # NOTE: lenient=True is required here even though coexisting CNAMEs should not exist
+                desired.add_record(new, replace=True, lenient=True)
+
+        return desired, existing
