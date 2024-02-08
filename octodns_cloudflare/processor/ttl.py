@@ -4,11 +4,6 @@
 
 from octodns.processor.base import BaseProcessor, ProcessorException
 
-
-class RestrictionException(ProcessorException):
-    pass
-
-
 class TtlToProxy(BaseProcessor):
     '''
     Ensure Cloudflare's proxy status is setup depending on the TTL set for the record. This
@@ -30,8 +25,6 @@ class TtlToProxy(BaseProcessor):
         targets:
           - cloudflare
     '''
-
-    SEVEN_DAYS = 60 * 60 * 24 * 7
 
     def __init__(self, name, ttl=0):
         super().__init__(name)
