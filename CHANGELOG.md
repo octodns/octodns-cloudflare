@@ -1,4 +1,4 @@
-## v0.0.4 - 2023-??-?? - Know your zones
+## v0.0.4 - 2024-02-08 - Know your zones
 
 * Support for Provider.list_zones to enable dynamic zone config when operating
   as a source
