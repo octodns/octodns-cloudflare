@@ -33,7 +33,9 @@ class TtlToProxy(BaseProcessor):
     def process_source_zone(self, zone, *args, **kwargs):
         for record in zone.records:
             if record.ttl == self.ttl:
+                record = record.copy()
                 record._octodns['cloudflare'] = {'proxied': True, 'auto-ttl': True}
                 record.ttl = 1; # Ensure we set to valid TTL.
+                desired.add_record(record, replace=True, lenient=True)
 
         return zone
