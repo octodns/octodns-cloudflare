@@ -4,6 +4,7 @@
 
 from octodns.processor.base import BaseProcessor, ProcessorException
 
+
 class TtlToProxy(BaseProcessor):
     '''
     Ensure Cloudflare's proxy status is setup depending on the TTL set for the record. This
@@ -34,8 +35,12 @@ class TtlToProxy(BaseProcessor):
         for record in zone.records:
             if record.ttl == self.ttl:
                 record = record.copy()
-                record._octodns['cloudflare'] = {'proxied': True, 'auto-ttl': True}
-                record.ttl = 1; # Ensure we set to valid TTL.
-                desired.add_record(record, replace=True, lenient=True)
+                record._octodns['cloudflare'] = {
+                    'proxied': True,
+                    'auto-ttl': True,
+                }
+                record.ttl = 1
+                # Ensure we set to valid TTL.
+                zone.add_record(record, replace=True, lenient=True)
 
         return zone
