@@ -17,7 +17,7 @@ from octodns.processor.base import BaseProcessor, ProcessorException
 from octodns.record import Create, Record, Update
 
 # TODO: remove __VERSION__ with the next major version release
-__version__ = __VERSION__ = '0.0.3'
+__version__ = __VERSION__ = '0.0.4'
 
 
 class CloudflareError(ProviderException):
