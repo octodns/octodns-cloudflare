@@ -40,3 +40,11 @@ class TestTtlToProxy(TestCase):
 
         added_proxy = processor.process_source_zone(zone)
         self.assertEqual(zone_expected.records, added_proxy.records)
+        good = next(r for r in added_proxy.records if r.name == 'good')
+        self.assertEqual(1, good.ttl)
+        self.assertEqual(
+            {'cloudflare': {'proxied': True, 'auto-ttl': True}}, good._octodns
+        )
+        bad = next(r for r in added_proxy.records if r.name == 'bad')
+        self.assertEqual(10, bad.ttl)
+        self.assertFalse('cloudflare' in bad._octodns)
