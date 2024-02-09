@@ -1,3 +1,8 @@
+## v0.0.4 - 2024-??-?? - ???
+
+* TtlToProxy processor added to enable the proxied flag based on a sentinel
+  ttl value. Useful when the source is not YamlProvider
+
 ## v0.0.4 - 2024-02-08 - Know your zones
 
 * Support for Provider.list_zones to enable dynamic zone config when operating
