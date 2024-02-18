@@ -36,10 +36,12 @@ octodns-cloudflare==0.0.1
 providers:
   cloudflare:
     class: octodns_cloudflare.CloudflareProvider
-    # Your Cloudflare account email address (required, optional if using token)
+    # Your Cloudflare account email address (not needed if using token)
+    # setting email along with an API Token will raise an error.
     email: env/CLOUDFLARE_EMAIL
     # The API Token or API Key.
-    # Required permissions for API Tokens are Zone:Read, DNS:Read and DNS:Key.
+    # Required permissions for API Tokens are Zone:Read, DNS:Read and DNS:Edit.
+    # Page Rules:Edit is required for managing Page Rules (URLFWD) records.
     token: env/CLOUDFLARE_TOKEN
     # Optional. Filter by account ID in environments where a token has access
     # across more than the permitted number of accounts allowed by Cloudflare.
@@ -112,7 +114,8 @@ CloudflareProvider does not support dynamic records.
 
 #### Required API Token Permissions
 
-Required Permissions for API Token are Zone:Read, DNS:Read, and DNS:Edit.
+Required Permissions for API Token are Zone:Read, DNS:Read, and DNS:Edit.  
+Page Rules:Edit is also required for managing Page Rules (URLFWD) records, otherwise an authentication error will be raised.
 
 #### TTL
 
