@@ -2,8 +2,8 @@
 #
 #
 
-from octodns.processor.base import BaseProcessor, ProcessorException
 from octodns_cloudflare import CloudflareProvider
+from octodns.processor.base import BaseProcessor, ProcessorException
 
 class ProxyCNAMEException(ProcessorException):
     pass
