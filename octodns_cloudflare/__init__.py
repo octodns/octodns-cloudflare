@@ -1064,4 +1064,5 @@ class CloudflareProvider(BaseProvider):
                 != self._record_is_just_auto_ttl(desired_record)
             ):
                 extra_changes.append(Update(existing_record, desired_record))
+        
         return extra_changes
