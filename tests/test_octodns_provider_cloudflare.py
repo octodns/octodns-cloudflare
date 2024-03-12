@@ -38,6 +38,24 @@ def set_record_auto_ttl_flag(record, auto_ttl):
     return record
 
 
+def set_record_comment(record, comment):
+    try:
+        record._octodns['cloudflare']['comment'] = comment
+    except KeyError:
+        record._octodns['cloudflare'] = {'comment': comment}
+
+    return record
+
+
+def set_record_tags(record, tags):
+    try:
+        record._octodns['cloudflare']['tags'] = tags
+    except KeyError:
+        record._octodns['cloudflare'] = {'tags': tags}
+
+    return record
+
+
 class TestCloudflareProvider(TestCase):
     expected = Zone('unit.tests.', [])
     source = YamlProvider('test', join(dirname(__file__), 'config'))
@@ -2432,3 +2450,276 @@ class TestCloudflareProvider(TestCase):
                 ],
                 provider.list_zones(),
             )
+
+    def test_record_contains_no_tags(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        zone = Zone('unit.tests.', [])
+        record = set_record_tags(
+            Record.new(
+                zone, 'a', {'ttl': 300, 'type': 'A', 'value': '1.2.3.4'}
+            ),
+            [],
+        )
+
+        data = next(provider._gen_data(record))
+
+        self.assertEqual('tags' in data, False)
+
+    def test_record_contains_tags(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        zone = Zone('unit.tests.', [])
+        record = set_record_tags(
+            Record.new(
+                zone, 'a', {'ttl': 300, 'type': 'A', 'value': '1.2.3.4'}
+            ),
+            ['testing:abc', 'abc:testing'],
+        )
+
+        data = next(provider._gen_data(record))
+
+        self.assertCountEqual(data['tags'], ['testing:abc', 'abc:testing'])
+
+    def test_add_tags(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        provider.zone_records = Mock(
+            return_value=[
+                {
+                    "id": "dd530a1c839d674c437144d2c2ea2861",
+                    "type": "CNAME",
+                    "name": "a.unit.tests",
+                    "content": "www.unit.tests",
+                    "tags": [],
+                    "ttl": 300,
+                    "locked": False,
+                    "zone_id": "ff12ab34cd5611334422ab3322997650",
+                    "zone_name": "unit.tests",
+                    "modified_on": "2017-03-11T18:01:43.420689Z",
+                    "created_on": "2017-03-11T18:01:43.420689Z",
+                    "meta": {"auto_added": False},
+                }
+            ]
+        )
+        existing = Zone('unit.tests.', [])
+        provider.populate(existing)
+        provider.zone_records = Mock(
+            return_value=[
+                {
+                    "id": "dd530a1c839d674c437144d2c2ea2861",
+                    "type": "CNAME",
+                    "name": "a.unit.tests",
+                    "content": "www.unit.tests",
+                    "tags": ["testing:abc", "abc:testing"],
+                    "ttl": 300,
+                    "locked": False,
+                    "zone_id": "ff12ab34cd5611334422ab3322997650",
+                    "zone_name": "unit.tests",
+                    "modified_on": "2017-03-11T18:01:43.420689Z",
+                    "created_on": "2017-03-11T18:01:43.420689Z",
+                    "meta": {"auto_added": False},
+                }
+            ]
+        )
+        desired = Zone('unit.tests.', [])
+        provider.populate(desired)
+        changes = existing.changes(desired, provider)
+
+        extra_changes = provider._extra_changes(existing, desired, changes)
+
+        self.assertEqual(1, len(extra_changes))
+        self.assertEqual(
+            extra_changes[0]
+            .existing._octodns.get('cloudflare', {})
+            .get('tags', []),
+            [],
+        )
+        self.assertEqual(
+            extra_changes[0].new._octodns['cloudflare']['tags'],
+            ['testing:abc', 'abc:testing'],
+        )
+
+    def test_update_tags(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        provider.zone_records = Mock(
+            return_value=[
+                {
+                    "id": "2b31564e42fd095d9fdd7abaf2fc86f8",
+                    "type": "CNAME",
+                    "name": "a.unit.tests",
+                    "content": "www.unit.tests",
+                    "tags": ["testing:abc", "abc:testing"],
+                    "ttl": 300,
+                    "locked": False,
+                    "zone_id": "ff12ab34cd5611334422ab3322997650",
+                    "zone_name": "unit.tests",
+                    "modified_on": "2017-03-11T18:01:43.420689Z",
+                    "created_on": "2017-03-11T18:01:43.420689Z",
+                    "meta": {"auto_added": False},
+                }
+            ]
+        )
+        existing = Zone('unit.tests.', [])
+        provider.populate(existing)
+        provider.zone_records = Mock(
+            return_value=[
+                {
+                    "id": "2b31564e42fd095d9fdd7abaf2fc86f8",
+                    "type": "CNAME",
+                    "name": "a.unit.tests",
+                    "content": "www.unit.tests",
+                    "tags": ["one:abc", "abc:testing"],
+                    "ttl": 300,
+                    "locked": False,
+                    "zone_id": "ff12ab34cd5611334422ab3322997650",
+                    "zone_name": "unit.tests",
+                    "modified_on": "2017-03-11T18:01:43.420689Z",
+                    "created_on": "2017-03-11T18:01:43.420689Z",
+                    "meta": {"auto_added": False},
+                }
+            ]
+        )
+        desired = Zone('unit.tests.', [])
+        provider.populate(desired)
+        changes = existing.changes(desired, provider)
+
+        extra_changes = provider._extra_changes(existing, desired, changes)
+
+        self.assertEqual(1, len(extra_changes))
+        self.assertEqual(
+            extra_changes[0]
+            .existing._octodns.get('cloudflare', {})
+            .get('tags', []),
+            ["testing:abc", "abc:testing"],
+        )
+        self.assertEqual(
+            sorted(extra_changes[0].new._octodns['cloudflare']['tags']),
+            sorted(["one:abc", "abc:testing"]),
+        )
+
+    def test_record_contains_comment(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        zone = Zone('unit.tests.', [])
+        record = set_record_comment(
+            Record.new(
+                zone, 'a', {'ttl': 300, 'type': 'A', 'value': '1.2.3.4'}
+            ),
+            'an example comment',
+        )
+
+        data = next(provider._gen_data(record))
+
+        self.assertEqual(data['comment'], 'an example comment')
+
+    def test_add_comment(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        provider.zone_records = Mock(
+            return_value=[
+                {
+                    "id": "dd530a1c839d674c437144d2c2ea2861",
+                    "type": "CNAME",
+                    "name": "a.unit.tests",
+                    "content": "www.unit.tests",
+                    "ttl": 300,
+                    "locked": False,
+                    "zone_id": "ff12ab34cd5611334422ab3322997650",
+                    "zone_name": "unit.tests",
+                    "modified_on": "2017-03-11T18:01:43.420689Z",
+                    "created_on": "2017-03-11T18:01:43.420689Z",
+                    "meta": {"auto_added": False},
+                }
+            ]
+        )
+        existing = Zone('unit.tests.', [])
+        provider.populate(existing)
+        provider.zone_records = Mock(
+            return_value=[
+                {
+                    "id": "dd530a1c839d674c437144d2c2ea2861",
+                    "type": "CNAME",
+                    "name": "a.unit.tests",
+                    "content": "www.unit.tests",
+                    "comment": "a new comment",
+                    "ttl": 300,
+                    "locked": False,
+                    "zone_id": "ff12ab34cd5611334422ab3322997650",
+                    "zone_name": "unit.tests",
+                    "modified_on": "2017-03-11T18:01:43.420689Z",
+                    "created_on": "2017-03-11T18:01:43.420689Z",
+                    "meta": {"auto_added": False},
+                }
+            ]
+        )
+        desired = Zone('unit.tests.', [])
+        provider.populate(desired)
+        changes = existing.changes(desired, provider)
+
+        extra_changes = provider._extra_changes(existing, desired, changes)
+
+        self.assertEqual(1, len(extra_changes))
+        self.assertEqual(
+            extra_changes[0]
+            .existing._octodns.get('cloudflare', {})
+            .get('comment', ''),
+            '',
+        )
+        self.assertEqual(
+            extra_changes[0].new._octodns['cloudflare']['comment'],
+            'a new comment',
+        )
+
+    def test_update_comment(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        provider.zone_records = Mock(
+            return_value=[
+                {
+                    "id": "2b31564e42fd095d9fdd7abaf2fc86f8",
+                    "type": "CNAME",
+                    "name": "a.unit.tests",
+                    "content": "www.unit.tests",
+                    "comment": "an existing comment",
+                    "ttl": 300,
+                    "locked": False,
+                    "zone_id": "ff12ab34cd5611334422ab3322997650",
+                    "zone_name": "unit.tests",
+                    "modified_on": "2017-03-11T18:01:43.420689Z",
+                    "created_on": "2017-03-11T18:01:43.420689Z",
+                    "meta": {"auto_added": False},
+                }
+            ]
+        )
+        existing = Zone('unit.tests.', [])
+        provider.populate(existing)
+        provider.zone_records = Mock(
+            return_value=[
+                {
+                    "id": "2b31564e42fd095d9fdd7abaf2fc86f8",
+                    "type": "CNAME",
+                    "name": "a.unit.tests",
+                    "content": "www.unit.tests",
+                    "comment": "a new comment",
+                    "ttl": 300,
+                    "locked": False,
+                    "zone_id": "ff12ab34cd5611334422ab3322997650",
+                    "zone_name": "unit.tests",
+                    "modified_on": "2017-03-11T18:01:43.420689Z",
+                    "created_on": "2017-03-11T18:01:43.420689Z",
+                    "meta": {"auto_added": False},
+                }
+            ]
+        )
+        desired = Zone('unit.tests.', [])
+        provider.populate(desired)
+        changes = existing.changes(desired, provider)
+
+        extra_changes = provider._extra_changes(existing, desired, changes)
+
+        self.assertEqual(1, len(extra_changes))
+        self.assertEqual(
+            extra_changes[0]
+            .existing._octodns.get('cloudflare', {})
+            .get('comment', ''),
+            'an existing comment',
+        )
+        self.assertEqual(
+            extra_changes[0].new._octodns['cloudflare']['comment'],
+            'a new comment',
+        )
