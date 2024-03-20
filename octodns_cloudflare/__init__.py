@@ -274,9 +274,9 @@ class CloudflareProvider(BaseProvider):
             values.append(
                 {
                     'preference': r['priority'],
-                    'exchange': f'{r["content"]}.'
-                    if r['content'] != '.'
-                    else '.',
+                    'exchange': (
+                        f'{r["content"]}.' if r['content'] != '.' else '.'
+                    ),
                 }
             )
         return {
