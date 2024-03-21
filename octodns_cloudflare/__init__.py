@@ -448,6 +448,22 @@ class CloudflareProvider(BaseProvider):
             self.log.debug('_record_for: auto-ttl=True')
             record._octodns['cloudflare'] = {'auto-ttl': True}
 
+        # update record comment
+        if records[0].get('comment'):
+            try:
+                record._octodns['cloudflare']['comment'] = records[0]['comment']
+            except KeyError:
+                record._octodns['cloudflare'] = {
+                    'comment': records[0]['comment']
+                }
+
+        # update record tags
+        if records[0].get('tags'):
+            try:
+                record._octodns['cloudflare']['tags'] = records[0]['tags']
+            except KeyError:
+                record._octodns['cloudflare'] = {'tags': records[0]['tags']}
+
         return record
 
     def list_zones(self):
@@ -728,6 +744,14 @@ class CloudflareProvider(BaseProvider):
             and record._octodns.get('cloudflare', {}).get('auto-ttl', False)
         )
 
+    def _record_comment(self, record):
+        'Returns record comment'
+        return record._octodns.get('cloudflare', {}).get('comment', '')
+
+    def _record_tags(self, record):
+        'Returns nonduplicate record tags'
+        return set(record._octodns.get('cloudflare', {}).get('tags', []))
+
     def _gen_data(self, record):
         name = record.fqdn[:-1]
         _type = record._type
@@ -754,6 +778,12 @@ class CloudflareProvider(BaseProvider):
 
                 if _type in _PROXIABLE_RECORD_TYPES:
                     content.update({'proxied': self._record_is_proxied(record)})
+
+                if self._record_comment(record):
+                    content.update({'comment': self._record_comment(record)})
+
+                if self._record_tags(record):
+                    content.update({'tags': list(self._record_tags(record))})
 
                 yield content
 
@@ -1062,6 +1092,16 @@ class CloudflareProvider(BaseProvider):
             ) or (
                 self._record_is_just_auto_ttl(existing_record)
                 != self._record_is_just_auto_ttl(desired_record)
+            ):
+                extra_changes.append(Update(existing_record, desired_record))
+
+            if self._record_comment(existing_record) != self._record_comment(
+                desired_record
+            ):
+                extra_changes.append(Update(existing_record, desired_record))
+
+            if self._record_tags(existing_record) != self._record_tags(
+                desired_record
             ):
                 extra_changes.append(Update(existing_record, desired_record))
 
