@@ -2,11 +2,14 @@
 #
 #
 
-from octodns_cloudflare import CloudflareProvider
 from octodns.processor.base import BaseProcessor, ProcessorException
+
+from octodns_cloudflare import CloudflareProvider
+
 
 class ProxyCNAMEException(ProcessorException):
     pass
+
 
 class ProxyCNAME(BaseProcessor):
     '''
@@ -42,10 +45,12 @@ class ProxyCNAME(BaseProcessor):
             # Check the record is NOT Cloudflare proxied OR is a non Cloudflare proxyable record type
             # https://developers.cloudflare.com/dns/manage-dns-records/reference/proxied-dns-records/#record-types
             # NOTE: Inclusion of ALIAS as this is generally a CNAME equivalent that can be used at the root
-            if not record._octodns.get('cloudflare', {}).get('proxied', False) or record._type not in ['ALIAS', 'A', 'AAAA', 'CNAME']:
+            if not record._octodns.get('cloudflare', {}).get(
+                'proxied', False
+            ) or record._type not in ['ALIAS', 'A', 'AAAA', 'CNAME']:
                 # Not interested in this record.
                 continue
-            
+
             # Remove record
             desired.remove_record(record)
 
@@ -64,10 +69,14 @@ class ProxyCNAME(BaseProcessor):
             new = record.new(
                 desired,
                 record.name,
-                {'type': type, 'ttl': record.ttl, 'value': (f"{record.fqdn}cdn.cloudflare.net.")}, # Set the value to Cloudflare CDN value e.g www.example.com.cdn.cloudflare.net.
+                {
+                    'type': type,
+                    'ttl': record.ttl,
+                    'value': (f"{record.fqdn}cdn.cloudflare.net."),
+                },  # Set the value to Cloudflare CDN value e.g www.example.com.cdn.cloudflare.net.
             )
 
-            # Replace the record 
+            # Replace the record
             # NOTE: lenient=True is required here even though coexisting CNAMEs should not exist
             desired.add_record(new, replace=True, lenient=True)
 
