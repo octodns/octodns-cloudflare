@@ -2,6 +2,7 @@
 
 * TtlToProxy processor added to enable the proxied flag based on a sentinel
   ttl value. Useful when the source is not YamlProvider
+* Add support for comments & tags via octodns.cloudflare.comment|tags
 
 ## v0.0.4 - 2024-02-08 - Know your zones
 
