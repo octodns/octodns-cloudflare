@@ -58,6 +58,18 @@ class TestProxyCNAME(TestCase):
         zone.add_record(proxyable_root)
         zone.add_record(non_proxyable)
 
+        # Expected for both Cloudflare / other providers
+        expected_non_proxyable = Record.new(
+            zone,
+            'bad',
+            {
+                'type': 'TXT',
+                'ttl': 300,
+                'value': 'test',
+                '_octodns': {'cloudflare': {'proxied': True}},
+            },
+        )
+
         # Expected result in Cloudflare provider
         expected_cf_proxyable = Record.new(
             zone,
@@ -79,19 +91,9 @@ class TestProxyCNAME(TestCase):
                 '_octodns': {'cloudflare': {'proxied': True}},
             },
         )
-        expected_cf_non_proxyable = Record.new(
-            zone,
-            'bad',
-            {
-                'type': 'TXT',
-                'ttl': 300,
-                'value': 'test',
-                '_octodns': {'cloudflare': {'proxied': True}},
-            },
-        )
         zone_expected_cf.add_record(expected_cf_proxyable)
         zone_expected_cf.add_record(expected_cf_proxyable_root)
-        zone_expected_cf.add_record(expected_cf_non_proxyable)
+        zone_expected_cf.add_record(expected_non_proxyable)
 
         # Expected result in other providers
         expected_other_proxyable = Record.new(
@@ -114,32 +116,26 @@ class TestProxyCNAME(TestCase):
                 '_octodns': {'cloudflare': {'proxied': True}},
             },
         )
-        expected_other_non_proxyable = Record.new(
-            zone,
-            'bad',
-            {
-                'type': 'TXT',
-                'ttl': 300,
-                'value': 'test',
-                '_octodns': {'cloudflare': {'proxied': True}},
-            },
-        )
         zone_expected_other.add_record(expected_other_proxyable)
         zone_expected_other.add_record(expected_other_proxyable_root)
-        zone_expected_other.add_record(expected_other_non_proxyable)
+        zone_expected_other.add_record(expected_non_proxyable)
 
         # Process / check Cloudflare provider destined records
+        cloudflare_provider = CloudflareProvider(
+            'test', 'email', 'token', retry_period=0
+        )
         processed_cf_desired, processed_cf_existing = (
             processor.process_source_and_target_zones(
-                zone, zone_empty, CloudflareProvider
+                zone, zone_empty, cloudflare_provider
             )
         )
         self.assertEqual(zone_expected_cf.records, processed_cf_desired.records)
 
         # Process / check other provider destined records
+        yaml_provider = YamlProvider('test', 'test')
         processed_other_desired, processed_other_existing = (
             processor.process_source_and_target_zones(
-                zone, zone_empty, YamlProvider
+                zone, zone_empty, yaml_provider
             )
         )
         self.assertEqual(
