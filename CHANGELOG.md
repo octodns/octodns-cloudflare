@@ -3,6 +3,9 @@
 * TtlToProxy processor added to enable the proxied flag based on a sentinel
   ttl value. Useful when the source is not YamlProvider
 * Add support for comments & tags via octodns.cloudflare.comment|tags
+* ProxyCNAME processor added to aid in supporting Cloudflare prixed values
+  with non-Cloudflare DNS providers by directing them to the relevant
+  .cdn.cloudflare.net. CNAME / ALIAS value.
 
 ## v0.0.4 - 2024-02-08 - Know your zones
 
