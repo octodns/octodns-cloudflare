@@ -122,6 +122,13 @@ Page Rules:Edit is also required for managing Page Rules (URLFWD) records, other
 Cloudflare has a different minimum TTL for enterprise and non-enterprise zones. See the [documentation](https://developers.cloudflare.com/dns/manage-dns-records/reference/ttl) for more information.
 In the past the CloudflareProvider had a fixed minimum TTL set to 120 seconds and for backwards compatbility this is the current default.
 
+### Processors
+
+| Processor | Description |
+|--|--|
+| [ProxyCNAME](/octodns_cloudflare/processor/proxycname.py) | Allows Cloudflare proxied records to be used on other providers without exposing the proxied record value. Points other providers to the relevant `.cdn.cloudflare.net` subdomain. Useful to allow split authority with a secondary provider while still retaining Cloudflare benefits for certain records. |
+| [TtlToProxy ](/octodns_cloudflare/processor/ttl.py) | Ensure Cloudflare's proxy status is setup depending on the TTL set for the record. This can be helpful for `octodns_bind.ZoneFileSource` or the like. |
+
 ### Developement
 
 See the [/script/](/script/) directory for some tools to help with the development process. They generally follow the [Script to rule them all](https://github.com/github/scripts-to-rule-them-all) pattern. Most useful is `./script/bootstrap` which will create a venv and install both the runtime and development related requirements. It will also hook up a pre-commit hook that covers most of what's run by CI.
