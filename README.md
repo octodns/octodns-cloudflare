@@ -85,7 +85,7 @@ name:
     value: 1.2.3.4
 ```
 
-Note: All record types support "auto" ttl, which is effecitvely equivilent to 300s.
+Note: All record types support "auto" ttl, which is effectively equivalent to 300s.
 
 ```yaml
 name:
@@ -126,7 +126,7 @@ An example when using Page Rules (URLFWD) records -
 #### TTL
 
 Cloudflare has a different minimum TTL for enterprise and non-enterprise zones. See the [documentation](https://developers.cloudflare.com/dns/manage-dns-records/reference/ttl) for more information.
-In the past the CloudflareProvider had a fixed minimum TTL set to 120 seconds and for backwards compatbility this is the current default.
+In the past the CloudflareProvider had a fixed minimum TTL set to 120 seconds and for backwards compatibility this is the current default.
 
 ### Processors
 
