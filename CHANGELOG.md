@@ -1,4 +1,4 @@
-## v0.0.4 - 2024-??-?? - ???
+## v0.0.5 - 2024-04-15 - Comment on your proxying and ttls
 
 * TtlToProxy processor added to enable the proxied flag based on a sentinel
   ttl value. Useful when the source is not YamlProvider
