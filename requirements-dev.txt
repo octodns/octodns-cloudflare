@@ -6,7 +6,7 @@ cffi==1.16.0
 click==8.1.7
 cmarkgfm==2024.1.14
 coverage==7.4.4
-docutils==0.21.1
+docutils==0.20.1
 importlib_metadata==7.1.0
 iniconfig==2.0.0
 isort==5.13.2
