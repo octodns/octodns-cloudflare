@@ -79,6 +79,7 @@ class CloudflareProvider(BaseProvider):
         zones_per_page=50,
         records_per_page=100,
         min_ttl=120,
+        auto_ttl_target=1,
         *args,
         **kwargs,
     ):
@@ -113,6 +114,8 @@ class CloudflareProvider(BaseProvider):
         self.records_per_page = records_per_page
         self.min_ttl = min_ttl
         self._sess = sess
+
+        self.auto_ttl_target = auto_ttl_target
 
         self._zones = None
         self._zone_records = {}
@@ -438,12 +441,12 @@ class CloudflareProvider(BaseProvider):
         record = Record.new(zone, name, data, source=self, lenient=lenient)
 
         proxied = proxied and _type in _PROXIABLE_RECORD_TYPES
-        auto_ttl = records[0]['ttl'] == 1
+        auto_ttl = records[0]['ttl'] == self.auto_ttl_target
         if proxied:
             self.log.debug('_record_for: proxied=True, auto-ttl=True')
             record._octodns['cloudflare'] = {'proxied': True, 'auto-ttl': True}
         elif auto_ttl:
-            # auto-ttl can still be set on any record type, signaled by a ttl=1,
+            # auto-ttl can still be set on any record type, signaled by a ttl=auto_ttl_target,
             # even if proxied is false.
             self.log.debug('_record_for: auto-ttl=True')
             record._octodns['cloudflare'] = {'auto-ttl': True}
