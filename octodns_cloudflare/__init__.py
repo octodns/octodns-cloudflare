@@ -402,7 +402,12 @@ class CloudflareProvider(BaseProvider):
                     path,
                     params={'page': page, 'per_page': self.records_per_page},
                 )
-                records += resp['result']
+                # populate DNS records, ensure only supported types are considered
+                records += [
+                    record
+                    for record in resp['result']
+                    if record['type'] in self.SUPPORTS
+                ]
                 info = resp['result_info']
                 if info['count'] > 0 and info['count'] == info['per_page']:
                     page += 1
@@ -508,8 +513,7 @@ class CloudflareProvider(BaseProvider):
                 else:
                     name = zone.hostname_from_fqdn(record['name'])
                     _type = record['type']
-                    if _type in self.SUPPORTS:
-                        values[name][record['type']].append(record)
+                    values[name][record['type']].append(record)
 
             for name, types in values.items():
                 for _type, records in types.items():
