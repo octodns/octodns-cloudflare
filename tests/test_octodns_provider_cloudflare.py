@@ -240,7 +240,7 @@ class TestCloudflareProvider(TestCase):
 
             zone = Zone('unit.tests.', [])
             provider.populate(zone)
-            self.assertEqual(22, len(zone.records))
+            self.assertEqual(23, len(zone.records))
 
             changes = self.expected.changes(zone, provider)
 
@@ -250,7 +250,7 @@ class TestCloudflareProvider(TestCase):
         # re-populating the same zone/records comes out of cache, no calls
         again = Zone('unit.tests.', [])
         provider.populate(again)
-        self.assertEqual(22, len(again.records))
+        self.assertEqual(23, len(again.records))
 
     def test_apply(self):
         provider = CloudflareProvider(
@@ -264,12 +264,12 @@ class TestCloudflareProvider(TestCase):
             {'result': {'id': 42}},  # zone create
         ] + [
             None
-        ] * 30  # individual record creates
+        ] * 31  # individual record creates
 
         # non-existent zone, create everything
         plan = provider.plan(self.expected)
-        self.assertEqual(18, len(plan.changes))
-        self.assertEqual(18, provider.apply(plan))
+        self.assertEqual(19, len(plan.changes))
+        self.assertEqual(19, provider.apply(plan))
         self.assertFalse(plan.exists)
 
         provider._request.assert_has_calls(
@@ -333,7 +333,7 @@ class TestCloudflareProvider(TestCase):
             True,
         )
         # expected number of total calls
-        self.assertEqual(32, provider._request.call_count)
+        self.assertEqual(33, provider._request.call_count)
 
         provider._request.reset_mock()
 
@@ -575,12 +575,12 @@ class TestCloudflareProvider(TestCase):
             {'result': {'id': 42}},  # zone create
         ] + [
             None
-        ] * 30  # individual record creates
+        ] * 31  # individual record creates
 
         # non-existent zone, create everything
         plan = provider.plan(self.expected)
-        self.assertEqual(18, len(plan.changes))
-        self.assertEqual(18, provider.apply(plan))
+        self.assertEqual(19, len(plan.changes))
+        self.assertEqual(19, provider.apply(plan))
         self.assertFalse(plan.exists)
 
         provider._request.assert_has_calls(
@@ -648,7 +648,7 @@ class TestCloudflareProvider(TestCase):
             True,
         )
         # expected number of total calls
-        self.assertEqual(32, provider._request.call_count)
+        self.assertEqual(33, provider._request.call_count)
 
     def test_update_add_swap(self):
         provider = CloudflareProvider('test', 'email', 'token', retry_period=0)
@@ -2382,7 +2382,7 @@ class TestCloudflareProvider(TestCase):
             # notice the i is a utf-8 character which becomes `xn--gthub-zsa.com.`
             zone = Zone('gíthub.com.', [])
             provider.populate(zone)
-        self.assertEqual(8, len(zone.records))
+        self.assertEqual(9, len(zone.records))
         self.assertEqual(zone.name, idna_encode('gíthub.com.'))
 
     def test_account_id_filter(self):
