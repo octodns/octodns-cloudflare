@@ -183,13 +183,39 @@
       "meta": {
         "auto_added": false
       }
+    },
+    {
+        "content": "1 13 2 B5BB9D8014A0F9B1D61E21E796D78DCCDF1352F23CD32812F4850B878AE4944C",
+        "created_on": "2024-05-20T19:27:04.707266Z",
+        "data": {
+            "algorithm": 13,
+            "digest": "B5BB9D8014A0F9B1D61E21E796D78DCCDF1352F23CD32812F4850B878AE4944C",
+            "digest_type": 2,
+            "key_tag": 1
+        },
+        "id": "b7ac1830a4f79eb06d17fd4ca035cafd",
+        "locked": false,
+        "meta": {
+            "auto_added": false,
+            "managed_by_apps": false,
+            "managed_by_argo_tunnel": false
+        },
+        "modified_on": "2024-05-20T19:27:04.707266Z",
+        "name": "ds.xormedia.com",
+        "proxiable": false,
+        "proxied": false,
+        "tags": [],
+        "ttl": 300,
+        "type": "DS",
+        "zone_id": "0896a14115d694fe7ad10dd1ed282578",
+        "zone_name": "xormedia.com"
     }
   ],
   "result_info": {
     "page": 3,
     "per_page": 10,
     "total_pages": 3,
-    "count": 7,
+    "count": 8,
     "total_count": 27
   },
   "success": true,

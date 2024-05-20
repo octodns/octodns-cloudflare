@@ -1,3 +1,7 @@
+## v0.0.6 - 2024-??-?? - ???
+
+* Fix handling of unsupported record types during apply
+
 ## v0.0.5 - 2024-04-15 - Comment on your proxying and ttls
 
 * TtlToProxy processor added to enable the proxied flag based on a sentinel
