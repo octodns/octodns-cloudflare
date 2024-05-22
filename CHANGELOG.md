@@ -1,4 +1,4 @@
-## v0.0.6 - 2024-??-?? - ???
+## v0.0.6 - 2024-05-22 - Deal with unknowns and make more knowns
 
 * Fix handling of unsupported record types during apply
 * DS record type support
