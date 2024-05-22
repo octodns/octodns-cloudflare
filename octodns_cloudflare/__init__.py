@@ -51,6 +51,7 @@ class CloudflareProvider(BaseProvider):
             'AAAA',
             'CAA',
             'CNAME',
+            'DS',
             'LOC',
             'MX',
             'NAPTR',
@@ -241,6 +242,26 @@ class CloudflareProvider(BaseProvider):
 
     _data_for_ALIAS = _data_for_CNAME
     _data_for_PTR = _data_for_CNAME
+
+    def _data_for_DS(self, _type, records):
+        values = []
+        for record in records:
+            key_tag, algorithm, digest_type, digest = record['content'].split(
+                ' ', 3
+            )
+            values.append(
+                {
+                    'algorithm': int(algorithm),
+                    'digest': digest,
+                    'digest_type': digest_type,
+                    'key_tag': int(key_tag),
+                }
+            )
+        return {
+            'type': _type,
+            'values': values,
+            'ttl': self._ttl_data(records[0]['ttl']),
+        }
 
     def _data_for_LOC(self, _type, records):
         values = []
@@ -613,6 +634,17 @@ class CloudflareProvider(BaseProvider):
                     'flags': value.flags,
                     'tag': value.tag,
                     'value': value.value,
+                }
+            }
+
+    def _contents_for_DS(self, record):
+        for value in record.values:
+            yield {
+                'data': {
+                    'key_tag': value.key_tag,
+                    'algorithm': value.algorithm,
+                    'digest_type': value.digest_type,
+                    'digest': value.digest,
                 }
             }
 
