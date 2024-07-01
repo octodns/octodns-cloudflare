@@ -16,7 +16,7 @@ from octodns.provider.base import BaseProvider
 from octodns.record import Create, Record, Update
 
 # TODO: remove __VERSION__ with the next major version release
-__version__ = __VERSION__ = '0.0.5'
+__version__ = __VERSION__ = '0.0.6'
 
 
 class CloudflareError(ProviderException):
@@ -51,6 +51,7 @@ class CloudflareProvider(BaseProvider):
             'AAAA',
             'CAA',
             'CNAME',
+            'DS',
             'LOC',
             'MX',
             'NAPTR',
@@ -245,6 +246,26 @@ class CloudflareProvider(BaseProvider):
     _data_for_ALIAS = _data_for_CNAME
     _data_for_PTR = _data_for_CNAME
 
+    def _data_for_DS(self, _type, records):
+        values = []
+        for record in records:
+            key_tag, algorithm, digest_type, digest = record['content'].split(
+                ' ', 3
+            )
+            values.append(
+                {
+                    'algorithm': int(algorithm),
+                    'digest': digest,
+                    'digest_type': digest_type,
+                    'key_tag': int(key_tag),
+                }
+            )
+        return {
+            'type': _type,
+            'values': values,
+            'ttl': self._ttl_data(records[0]['ttl']),
+        }
+
     def _data_for_LOC(self, _type, records):
         values = []
         for record in records:
@@ -405,7 +426,12 @@ class CloudflareProvider(BaseProvider):
                     path,
                     params={'page': page, 'per_page': self.records_per_page},
                 )
-                records += resp['result']
+                # populate DNS records, ensure only supported types are considered
+                records += [
+                    record
+                    for record in resp['result']
+                    if record['type'] in self.SUPPORTS
+                ]
                 info = resp['result_info']
                 if info['count'] > 0 and info['count'] == info['per_page']:
                     page += 1
@@ -511,8 +537,7 @@ class CloudflareProvider(BaseProvider):
                 else:
                     name = zone.hostname_from_fqdn(record['name'])
                     _type = record['type']
-                    if _type in self.SUPPORTS:
-                        values[name][record['type']].append(record)
+                    values[name][record['type']].append(record)
 
             for name, types in values.items():
                 for _type, records in types.items():
@@ -612,6 +637,17 @@ class CloudflareProvider(BaseProvider):
                     'flags': value.flags,
                     'tag': value.tag,
                     'value': value.value,
+                }
+            }
+
+    def _contents_for_DS(self, record):
+        for value in record.values:
+            yield {
+                'data': {
+                    'key_tag': value.key_tag,
+                    'algorithm': value.algorithm,
+                    'digest_type': value.digest_type,
+                    'digest': value.digest,
                 }
             }
 

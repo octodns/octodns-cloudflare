@@ -105,7 +105,7 @@ name:
 
 #### Records
 
-CloudflareProvider supports A, AAAA, ALIAS, CAA, CNAME, LOC, MX, NAPTR, NS, PTR, SPF, SRV, SSHFP, TXT, and URLFWD. There are restrictions on CAA tag support.
+CloudflareProvider supports A, AAAA, ALIAS, CAA, CNAME, DS, LOC, MX, NAPTR, NS, PTR, SPF, SRV, SSHFP, TXT, and URLFWD. There are restrictions on CAA tag support.
 
 #### Root NS Records
 
