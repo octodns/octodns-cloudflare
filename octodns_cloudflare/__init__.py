@@ -161,9 +161,13 @@ class CloudflareProvider(BaseProvider):
         return resp.json()
 
     def _change_keyer(self, change):
-        key = change.__class__.__name__
-        order = {'Delete': 0, 'Create': 1, 'Update': 2}
-        return order[key]
+        _type = change.record._type
+        if _type == 'DS' and isinstance(change, Create):
+            # when creating records in CF the NS for a node must come before the
+            # DS so we need to flip their order. when deleting they'll already
+            # be in the required order
+            _type = 'ZDS'
+        return (change.CLASS_ORDERING, change.record.name, _type)
 
     @property
     def zones(self):

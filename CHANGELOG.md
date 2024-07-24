@@ -1,3 +1,8 @@
+## v0.0.? - 2024-??-?? - ???
+
+* Create DS records after their sibling NS records to appease Cloudflare's
+  validations
+
 ## v0.0.6 - 2024-05-22 - Deal with unknowns and make more knowns
 
 * Fix handling of unsupported record types during apply

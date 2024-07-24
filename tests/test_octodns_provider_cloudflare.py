@@ -2723,3 +2723,41 @@ class TestCloudflareProvider(TestCase):
             extra_changes[0].new._octodns['cloudflare']['comment'],
             'a new comment',
         )
+
+    def test_change_keyer(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+
+        zone = Zone('unit.tests.', [])
+
+        ds = Record.new(
+            zone,
+            'subber',
+            {
+                'ttl': 300,
+                'type': 'DS',
+                'value': {
+                    'key_tag': 23,
+                    'algorithm': 2,
+                    'digest_type': 3,
+                    'digest': 'abcdefg',
+                },
+            },
+        )
+        self.assertEqual(
+            (1, 'subber', 'ZDS'), provider._change_keyer(Create(ds))
+        )
+        self.assertEqual(
+            (0, 'subber', 'DS'), provider._change_keyer(Delete(ds))
+        )
+
+        ns = Record.new(
+            zone,
+            'subber',
+            {'ttl': 300, 'type': 'NS', 'value': 'ns1.unit.tests.'},
+        )
+        self.assertEqual(
+            (1, 'subber', 'NS'), provider._change_keyer(Create(ns))
+        )
+        self.assertEqual(
+            (0, 'subber', 'NS'), provider._change_keyer(Delete(ns))
+        )
