@@ -244,8 +244,8 @@ class TestCloudflareProvider(TestCase):
 
             changes = self.expected.changes(zone, provider)
 
-            # delete a urlfwd, create 3 urlfwd, and create 1 spf
-            self.assertEqual(9, len(changes))
+            # delete a urlfwd, create 3 urlfwd, and create 1 spf, delete 1 NS
+            self.assertEqual(10, len(changes))
 
         # re-populating the same zone/records comes out of cache, no calls
         again = Zone('unit.tests.', [])
@@ -264,12 +264,12 @@ class TestCloudflareProvider(TestCase):
             {'result': {'id': 42}},  # zone create
         ] + [
             None
-        ] * 31  # individual record creates
+        ] * 32  # individual record creates
 
         # non-existent zone, create everything
         plan = provider.plan(self.expected)
-        self.assertEqual(19, len(plan.changes))
-        self.assertEqual(19, provider.apply(plan))
+        self.assertEqual(20, len(plan.changes))
+        self.assertEqual(20, provider.apply(plan))
         self.assertFalse(plan.exists)
 
         provider._request.assert_has_calls(
@@ -333,7 +333,7 @@ class TestCloudflareProvider(TestCase):
             True,
         )
         # expected number of total calls
-        self.assertEqual(33, provider._request.call_count)
+        self.assertEqual(34, provider._request.call_count)
 
         provider._request.reset_mock()
 
@@ -575,12 +575,12 @@ class TestCloudflareProvider(TestCase):
             {'result': {'id': 42}},  # zone create
         ] + [
             None
-        ] * 31  # individual record creates
+        ] * 32  # individual record creates
 
         # non-existent zone, create everything
         plan = provider.plan(self.expected)
-        self.assertEqual(19, len(plan.changes))
-        self.assertEqual(19, provider.apply(plan))
+        self.assertEqual(20, len(plan.changes))
+        self.assertEqual(20, provider.apply(plan))
         self.assertFalse(plan.exists)
 
         provider._request.assert_has_calls(
@@ -648,7 +648,7 @@ class TestCloudflareProvider(TestCase):
             True,
         )
         # expected number of total calls
-        self.assertEqual(33, provider._request.call_count)
+        self.assertEqual(34, provider._request.call_count)
 
     def test_update_add_swap(self):
         provider = CloudflareProvider('test', 'email', 'token', retry_period=0)
@@ -1290,10 +1290,6 @@ class TestCloudflareProvider(TestCase):
 
         # missing content, equivilent to empty from CF
         data = provider._data_for_TXT('TXT', [{'ttl': 42}])
-        from pprint import pprint
-
-        pprint(data)
-
         self.assertEqual({'ttl': 42, 'type': 'TXT', 'values': ['']}, data)
 
     def test_alias(self):
@@ -2761,3 +2757,58 @@ class TestCloudflareProvider(TestCase):
         self.assertEqual(
             (0, 'subber', 'NS'), provider._change_keyer(Delete(ns))
         )
+
+    def test_process_desired_zone(self):
+        provider = CloudflareProvider(
+            'test', 'email', 'token', strict_supports=False
+        )
+
+        zone = Zone('unit.tests.', [])
+
+        ds = Record.new(
+            zone,
+            'subber',
+            {
+                'ttl': 300,
+                'type': 'DS',
+                'value': {
+                    'key_tag': 23,
+                    'algorithm': 2,
+                    'digest_type': 3,
+                    'digest': 'abcdefg',
+                },
+            },
+        )
+        ns = Record.new(
+            zone,
+            'subber',
+            {'ttl': 300, 'type': 'NS', 'value': 'ns1.unit.tests.'},
+        )
+
+        # has both
+        desired = zone.copy()
+        desired.add_record(ds)
+        desired.add_record(ns)
+        self.assertEqual(
+            {ds, ns}, provider._process_desired_zone(desired).records
+        )
+
+        # just NS
+        desired = zone.copy()
+        desired.add_record(ns)
+        self.assertEqual({ns}, provider._process_desired_zone(desired).records)
+
+        # just DS, will be removed
+        desired = zone.copy()
+        desired.add_record(ds)
+        self.assertEqual(set(), provider._process_desired_zone(desired).records)
+
+        # when in strict mode will error
+        provider.strict_supports = True
+        desired = zone.copy()
+        desired.add_record(ds)
+        with self.assertRaises(SupportsException) as ctx:
+            provider._process_desired_zone(desired)
+        msg = str(ctx.exception)
+        self.assertTrue('subber.unit.tests.' in msg)
+        self.assertTrue('coresponding NS record' in msg)

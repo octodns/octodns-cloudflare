@@ -2,6 +2,8 @@
 
 * Create DS records after their sibling NS records to appease Cloudflare's
   validations
+* Throw an error when trying to create a DS without a coresponding NS,
+  `strict_supports: false` will omit the DS instead
 
 ## v0.0.6 - 2024-05-22 - Deal with unknowns and make more knowns
 

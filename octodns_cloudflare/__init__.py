@@ -622,6 +622,24 @@ class CloudflareProvider(BaseProvider):
 
         return True
 
+    def _process_desired_zone(self, desired):
+        dses = {}
+        nses = set()
+        for record in desired.records:
+            if record._type == 'DS':
+                dses[record.name] = record
+            elif record._type == 'NS':
+                nses.add(record.name)
+
+        for name, record in dses.items():
+            if name not in nses:
+                msg = f'DS record {record.fqdn} does not have coresponding NS record and Cloudflare requires it'
+                fallback = 'omitting the record'
+                self.supports_warn_or_except(msg, fallback)
+                desired.remove_record(record)
+
+        return desired
+
     def _contents_for_multiple(self, record):
         for value in record.values:
             yield {'content': value}
