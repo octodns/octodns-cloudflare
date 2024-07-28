@@ -67,6 +67,9 @@ providers:
     # A different limit for (non-)enterprise zone applies.
     # See: https://developers.cloudflare.com/dns/manage-dns-records/reference/ttl
     #min_ttl: 120
+    # Optional. Default: 1. TTL that should indicate the record should have an automatic TTL set.
+    # Cloudflare usually sets this to 300 seconds (5 minutes).
+    #auto_ttl_target: 1
 ```
 
 Note: The "proxied" flag of "A", "AAAA" and "CNAME" records can be managed via the YAML provider like so:
