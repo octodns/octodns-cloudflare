@@ -73,13 +73,16 @@ dname:
   type: DNAME
   value: unit.tests.
 ds:
-  ttl: 300
-  type: DS
-  value:
-    algorithm: 13
-    digest: "B5BB9D8014A0F9B1D61E21E796D78DCCDF1352F23CD32812F4850B878AE4944C"
-    digest_type: 2
-    key_tag: 1
+  - ttl: 300
+    type: DS
+    value:
+      algorithm: 13
+      digest: "B5BB9D8014A0F9B1D61E21E796D78DCCDF1352F23CD32812F4850B878AE4944C"
+      digest_type: 2
+      key_tag: 1
+  - ttl: 301
+    type: NS
+    value: ns1.unit.tests.
 excluded:
   octodns:
     excluded:
