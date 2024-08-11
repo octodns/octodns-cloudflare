@@ -209,6 +209,56 @@
         "type": "DS",
         "zone_id": "0896a14115d694fe7ad10dd1ed282578",
         "zone_name": "unit.tests"
+    },
+    {
+        "content": "1 www.unit.tests. alpn=\"h3,h2\"",
+        "created_on": "2024-05-20T19:27:04.707266Z",
+        "data": {
+            "priority": 1,
+            "target": "www.unit.tests.",
+            "value": "alpn=\"h3,h2\""
+        },
+        "id": "e7ac1830a4f79eb06d17fd4ca043cafd",
+        "locked": false,
+        "meta": {
+            "auto_added": false,
+            "managed_by_apps": false,
+            "managed_by_argo_tunnel": false
+        },
+        "modified_on": "2024-05-20T19:27:04.707266Z",
+        "name": "svcb.unit.tests.",
+        "proxiable": false,
+        "proxied": false,
+        "tags": [],
+        "ttl": 303,
+        "type": "SVCB",
+        "zone_id": "0896a14115d694fe7ad10dd1ed282578",
+        "zone_name": "unit.tests"
+    },
+    {
+        "content": "1 www.unit.tests. alpn=\"h3,h2\" ipv4hint=\"127.0.0.2\"",
+        "created_on": "2024-05-20T19:27:04.707266Z",
+        "data": {
+            "priority": 1,
+            "target": "www.unit.tests.",
+            "value": "alpn=\"h3,h2\" ipv4hint=\"127.0.0.2\""
+        },
+        "id": "f8ac1830a4f79eb06d17fd4ca043cafd",
+        "locked": false,
+        "meta": {
+            "auto_added": false,
+            "managed_by_apps": false,
+            "managed_by_argo_tunnel": false
+        },
+        "modified_on": "2024-05-20T19:27:04.707266Z",
+        "name": "https.unit.tests.",
+        "proxiable": false,
+        "proxied": false,
+        "tags": [],
+        "ttl": 304,
+        "type": "HTTPS",
+        "zone_id": "0896a14115d694fe7ad10dd1ed282578",
+        "zone_name": "unit.tests"
     }
   ],
   "result_info": {
