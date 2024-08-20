@@ -1,4 +1,4 @@
-## v0.0.? - 2024-??-?? - ???
+## v0.0.7 - 2024-08-20 - DS always come second
 
 * Create DS records after their sibling NS records to appease Cloudflare's
   validations
