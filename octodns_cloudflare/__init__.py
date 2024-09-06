@@ -25,7 +25,7 @@ except ImportError:  # pragma: no cover
     SUPPORTS_SVCB = False
 
 # TODO: remove __VERSION__ with the next major version release
-__version__ = __VERSION__ = '0.0.6'
+__version__ = __VERSION__ = '0.0.7'
 
 
 class CloudflareError(ProviderException):
