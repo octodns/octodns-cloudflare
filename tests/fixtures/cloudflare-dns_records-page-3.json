@@ -201,7 +201,7 @@
             "managed_by_argo_tunnel": false
         },
         "modified_on": "2024-05-20T19:27:04.707266Z",
-        "name": "ds.unit.tests.",
+        "name": "ds.unit.tests",
         "proxiable": false,
         "proxied": false,
         "tags": [],
