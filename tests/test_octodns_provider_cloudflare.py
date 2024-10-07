@@ -240,7 +240,7 @@ class TestCloudflareProvider(TestCase):
 
             zone = Zone('unit.tests.', [])
             provider.populate(zone)
-            self.assertEqual(23, len(zone.records))
+            self.assertEqual(25, len(zone.records))
 
             changes = self.expected.changes(zone, provider)
 
@@ -250,7 +250,7 @@ class TestCloudflareProvider(TestCase):
         # re-populating the same zone/records comes out of cache, no calls
         again = Zone('unit.tests.', [])
         provider.populate(again)
-        self.assertEqual(23, len(again.records))
+        self.assertEqual(25, len(again.records))
 
     def test_apply(self):
         provider = CloudflareProvider(
@@ -264,12 +264,12 @@ class TestCloudflareProvider(TestCase):
             {'result': {'id': 42}},  # zone create
         ] + [
             None
-        ] * 32  # individual record creates
+        ] * 34  # individual record creates
 
         # non-existent zone, create everything
         plan = provider.plan(self.expected)
-        self.assertEqual(20, len(plan.changes))
-        self.assertEqual(20, provider.apply(plan))
+        self.assertEqual(22, len(plan.changes))
+        self.assertEqual(22, provider.apply(plan))
         self.assertFalse(plan.exists)
 
         provider._request.assert_has_calls(
@@ -333,7 +333,7 @@ class TestCloudflareProvider(TestCase):
             True,
         )
         # expected number of total calls
-        self.assertEqual(34, provider._request.call_count)
+        self.assertEqual(36, provider._request.call_count)
 
         provider._request.reset_mock()
 
@@ -575,12 +575,12 @@ class TestCloudflareProvider(TestCase):
             {'result': {'id': 42}},  # zone create
         ] + [
             None
-        ] * 32  # individual record creates
+        ] * 34  # individual record creates
 
         # non-existent zone, create everything
         plan = provider.plan(self.expected)
-        self.assertEqual(20, len(plan.changes))
-        self.assertEqual(20, provider.apply(plan))
+        self.assertEqual(22, len(plan.changes))
+        self.assertEqual(22, provider.apply(plan))
         self.assertFalse(plan.exists)
 
         provider._request.assert_has_calls(
@@ -648,7 +648,7 @@ class TestCloudflareProvider(TestCase):
             True,
         )
         # expected number of total calls
-        self.assertEqual(34, provider._request.call_count)
+        self.assertEqual(36, provider._request.call_count)
 
     def test_update_add_swap(self):
         provider = CloudflareProvider('test', 'email', 'token', retry_period=0)
@@ -1277,6 +1277,31 @@ class TestCloudflareProvider(TestCase):
             list(srv_record_with_sub_contents)[0],
         )
 
+    def test_svcb(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+
+        value = {
+            'svcpriority': 42,
+            'targetname': 'www.unit.tests.',
+            'svcparams': {
+                'alpn': ['h3', 'h2'],
+                'ipv4hint': '127.0.0.1',
+                'no-default-alpn': None,
+            },
+        }
+        data = {'type': 'SVCB', 'ttl': 93, 'value': value}
+        zone = Zone('unit.tests.', [])
+        record = Record.new(zone, 'svcb', data, lenient=True)
+        contents = list(provider._contents_for_SVCB(record))
+        self.assertEqual(
+            {
+                'priority': value['svcpriority'],
+                'target': value['targetname'],
+                'value': ' alpn="h3,h2" ipv4hint="127.0.0.1" no-default-alpn',
+            },
+            contents[0]['data'],
+        )
+
     def test_txt(self):
         provider = CloudflareProvider('test', 'email', 'token')
 
@@ -1384,6 +1409,17 @@ class TestCloudflareProvider(TestCase):
                         'precision_vert': 2,
                     },
                     'type': 'LOC',
+                },
+            ),
+            (
+                '99 www.unit.tests. alpn="h3,h2"',
+                {
+                    'data': {
+                        'priority': 99,
+                        'target': 'www.unit.tests.',
+                        'value': 'alpn="h3,h2"',
+                    },
+                    'type': 'SVCB',
                 },
             ),
         ):
@@ -2378,7 +2414,7 @@ class TestCloudflareProvider(TestCase):
             # notice the i is a utf-8 character which becomes `xn--gthub-zsa.com.`
             zone = Zone('gíthub.com.', [])
             provider.populate(zone)
-        self.assertEqual(9, len(zone.records))
+        self.assertEqual(11, len(zone.records))
         self.assertEqual(zone.name, idna_encode('gíthub.com.'))
 
     def test_account_id_filter(self):

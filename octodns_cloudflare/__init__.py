@@ -3,6 +3,7 @@
 #
 
 from collections import defaultdict
+from io import StringIO
 from logging import getLogger
 from time import sleep
 from urllib.parse import urlsplit
@@ -14,6 +15,14 @@ from octodns.idna import IdnaDict
 from octodns.provider import ProviderException, SupportsException
 from octodns.provider.base import BaseProvider
 from octodns.record import Create, Record, Update
+
+try:  # pragma: no cover
+    from octodns.record.https import HttpsValue
+    from octodns.record.svcb import SvcbValue
+
+    SUPPORTS_SVCB = True
+except ImportError:  # pragma: no cover
+    SUPPORTS_SVCB = False
 
 # TODO: remove __VERSION__ with the next major version release
 __version__ = __VERSION__ = '0.0.7'
@@ -64,6 +73,11 @@ class CloudflareProvider(BaseProvider):
             'TXT',
         )
     )
+
+    # These are only supported if we have a new enough octoDNS core
+    if SUPPORTS_SVCB:  # pragma: no cover
+        SUPPORTS.add('HTTPS')
+        SUPPORTS.add('SVCB')
 
     TIMEOUT = 15
 
@@ -351,6 +365,32 @@ class CloudflareProvider(BaseProvider):
                     'target': target,
                 }
             )
+        return {
+            'type': _type,
+            'ttl': self._ttl_data(records[0]['ttl']),
+            'values': values,
+        }
+
+    def _data_for_SVCB(self, _type, records):
+        values = []
+        for r in records:
+            # it's cleaner/easier to parse the rdata version than CF's broken up
+            # `data` which is really only half parsed
+            value = SvcbValue.parse_rdata_text(r['content'])
+            values.append(value)
+        return {
+            'type': _type,
+            'ttl': self._ttl_data(records[0]['ttl']),
+            'values': values,
+        }
+
+    def _data_for_HTTPS(self, _type, records):
+        values = []
+        for r in records:
+            # it's cleaner/easier to parse the rdata version than CF's broken up
+            # `data` which is really only half parsed
+            value = HttpsValue.parse_rdata_text(r['content'])
+            values.append(value)
         return {
             'type': _type,
             'ttl': self._ttl_data(records[0]['ttl']),
@@ -753,6 +793,29 @@ class CloudflareProvider(BaseProvider):
                 }
             }
 
+    def _contents_for_SVCB(self, record):
+        for value in record.values:
+            params = StringIO()
+            for k, v in value.svcparams.items():
+                params.write(' ')
+                params.write(k)
+                if v is not None:
+                    params.write('="')
+                    if isinstance(v, list):
+                        params.write(','.join(v))
+                    else:
+                        params.write(v)
+                    params.write('"')
+            yield {
+                'data': {
+                    'priority': value.svcpriority,
+                    'target': value.targetname,
+                    'value': params.getvalue(),
+                }
+            }
+
+    _contents_for_HTTPS = _contents_for_SVCB
+
     def _contents_for_TLSA(self, record):
         for value in record.values:
             yield {
@@ -911,6 +974,12 @@ class CloudflareProvider(BaseProvider):
             fingerprint_type = data['type']
             fingerprint = data['fingerprint']
             return f'{algorithm} {fingerprint_type} {fingerprint}'
+        elif _type in ('HTTPS', 'SVCB'):
+            data = data['data']
+            priority = data['priority']
+            target = data['target']
+            value = data['value']
+            return f'{priority} {target} {value}'
         elif _type == 'TLSA':
             data = data['data']
             usage = data['usage']

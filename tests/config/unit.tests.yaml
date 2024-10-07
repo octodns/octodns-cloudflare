@@ -89,6 +89,18 @@ excluded:
     - test
   type: CNAME
   value: unit.tests.
+https:
+  ttl: 304
+  type: HTTPS
+  value:
+    svcparams:
+      alpn:
+        - h3
+        - h2
+      ipv4hint:
+        - 127.0.0.2
+    svcpriority: 1
+    targetname: www.unit.tests.
 ignored:
   octodns:
     ignored: true
@@ -165,6 +177,16 @@ sub:
   values:
   - 6.2.3.4.
   - 7.2.3.4.
+svcb:
+  ttl: 303
+  type: SVCB
+  value:
+    svcparams:
+      alpn:
+        - h3
+        - h2
+    svcpriority: 1
+    targetname: www.unit.tests.
 txt:
   ttl: 600
   type: TXT

@@ -4,6 +4,7 @@
   validations
 * Throw an error when trying to create a DS without a coresponding NS,
   `strict_supports: false` will omit the DS instead
+* Add support for SVCB and HTTPS record types
 
 ## v0.0.6 - 2024-05-22 - Deal with unknowns and make more knowns
 
