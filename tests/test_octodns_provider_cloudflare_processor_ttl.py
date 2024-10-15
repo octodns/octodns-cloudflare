@@ -43,8 +43,8 @@ class TestTtlToProxy(TestCase):
         good = next(r for r in added_proxy.records if r.name == 'good')
         self.assertEqual(1, good.ttl)
         self.assertEqual(
-            {'cloudflare': {'proxied': True, 'auto-ttl': True}}, good._octodns
+            {'cloudflare': {'proxied': True, 'auto-ttl': True}}, good.octodns
         )
         bad = next(r for r in added_proxy.records if r.name == 'bad')
         self.assertEqual(10, bad.ttl)
-        self.assertFalse('cloudflare' in bad._octodns)
+        self.assertFalse('cloudflare' in bad.octodns)
