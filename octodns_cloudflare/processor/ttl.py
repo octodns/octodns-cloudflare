@@ -35,7 +35,7 @@ class TtlToProxy(BaseProcessor):
         for record in zone.records:
             if record.ttl == self.ttl:
                 record = record.copy()
-                record._octodns['cloudflare'] = {
+                record.octodns['cloudflare'] = {
                     'proxied': True,
                     'auto-ttl': True,
                 }

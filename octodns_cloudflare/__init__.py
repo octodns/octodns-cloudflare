@@ -12,7 +12,7 @@ from requests import Session
 
 from octodns import __VERSION__ as octodns_version
 from octodns.idna import IdnaDict
-from octodns.provider import ProviderException, SupportsException
+from octodns.provider import ProviderException
 from octodns.provider.base import BaseProvider
 from octodns.record import Create, Record, Update
 
@@ -68,7 +68,6 @@ class CloudflareProvider(BaseProvider):
             'PTR',
             'SSHFP',
             'SRV',
-            'SPF',
             'TLSA',
             'TXT',
         )
@@ -511,28 +510,28 @@ class CloudflareProvider(BaseProvider):
         auto_ttl = records[0]['ttl'] == 1
         if proxied:
             self.log.debug('_record_for: proxied=True, auto-ttl=True')
-            record._octodns['cloudflare'] = {'proxied': True, 'auto-ttl': True}
+            record.octodns['cloudflare'] = {'proxied': True, 'auto-ttl': True}
         elif auto_ttl:
             # auto-ttl can still be set on any record type, signaled by a ttl=1,
             # even if proxied is false.
             self.log.debug('_record_for: auto-ttl=True')
-            record._octodns['cloudflare'] = {'auto-ttl': True}
+            record.octodns['cloudflare'] = {'auto-ttl': True}
 
         # update record comment
         if records[0].get('comment'):
             try:
-                record._octodns['cloudflare']['comment'] = records[0]['comment']
+                record.octodns['cloudflare']['comment'] = records[0]['comment']
             except KeyError:
-                record._octodns['cloudflare'] = {
+                record.octodns['cloudflare'] = {
                     'comment': records[0]['comment']
                 }
 
         # update record tags
         if records[0].get('tags'):
             try:
-                record._octodns['cloudflare']['tags'] = records[0]['tags']
+                record.octodns['cloudflare']['tags'] = records[0]['tags']
             except KeyError:
-                record._octodns['cloudflare'] = {'tags': records[0]['tags']}
+                record.octodns['cloudflare'] = {'tags': records[0]['tags']}
 
         return record
 
@@ -607,9 +606,6 @@ class CloudflareProvider(BaseProvider):
         return exists
 
     def _include_change(self, change):
-        if isinstance(change, Create) and change.new._type == 'SPF':
-            msg = f'{self.id}: creating new SPF records not supported, use TXT instead'
-            raise SupportsException(msg)
 
         if isinstance(change, Update):
             new = change.new
@@ -853,7 +849,7 @@ class CloudflareProvider(BaseProvider):
             }
 
     def _record_is_proxied(self, record):
-        return not self.cdn and record._octodns.get('cloudflare', {}).get(
+        return not self.cdn and record.octodns.get('cloudflare', {}).get(
             'proxied', False
         )
 
@@ -862,16 +858,16 @@ class CloudflareProvider(BaseProvider):
         return (
             not self._record_is_proxied(record)
             and not self.cdn
-            and record._octodns.get('cloudflare', {}).get('auto-ttl', False)
+            and record.octodns.get('cloudflare', {}).get('auto-ttl', False)
         )
 
     def _record_comment(self, record):
         'Returns record comment'
-        return record._octodns.get('cloudflare', {}).get('comment', '')
+        return record.octodns.get('cloudflare', {}).get('comment', '')
 
     def _record_tags(self, record):
         'Returns nonduplicate record tags'
-        return set(record._octodns.get('cloudflare', {}).get('tags', []))
+        return set(record.octodns.get('cloudflare', {}).get('tags', []))
 
     def _gen_data(self, record):
         name = record.fqdn[:-1]

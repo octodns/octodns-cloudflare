@@ -45,7 +45,7 @@ class ProxyCNAME(BaseProcessor):
             # Check the record is NOT Cloudflare proxied OR is a non Cloudflare proxyable record type
             # https://developers.cloudflare.com/dns/manage-dns-records/reference/proxied-dns-records/#record-types
             # NOTE: Inclusion of ALIAS as this is generally a CNAME equivalent that can be used at the root
-            if not record._octodns.get('cloudflare', {}).get(
+            if not record.octodns.get('cloudflare', {}).get(
                 'proxied', False
             ) or record._type not in ['ALIAS', 'A', 'AAAA', 'CNAME']:
                 # Not interested in this record.

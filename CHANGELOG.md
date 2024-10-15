@@ -1,3 +1,14 @@
+## v1.0.0 - 2024-??-?? - ???
+
+Noteworthy Changes:
+
+* Complete removal of SPF record support, records should be transitioned to TXT
+  values before updating to this version.
+
+Changes:
+
+* Address pending octoDNS 2.x deprecations, require minimum of 1.5.x
+
 ## v0.0.7 - 2024-08-20 - DS always come second
 
 * Create DS records after their sibling NS records to appease Cloudflare's
