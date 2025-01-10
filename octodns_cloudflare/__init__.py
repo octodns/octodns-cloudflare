@@ -94,6 +94,7 @@ class CloudflareProvider(BaseProvider):
         zones_per_page=50,
         records_per_page=100,
         min_ttl=120,
+        auto_ttl=False,
         *args,
         **kwargs,
     ):
@@ -127,6 +128,7 @@ class CloudflareProvider(BaseProvider):
         self.zones_per_page = zones_per_page
         self.records_per_page = records_per_page
         self.min_ttl = min_ttl
+        self.auto_ttl = auto_ttl
         self._sess = sess
 
         self._zones = None
@@ -862,7 +864,7 @@ class CloudflareProvider(BaseProvider):
         return (
             not self._record_is_proxied(record)
             and not self.cdn
-            and record._octodns.get('cloudflare', {}).get('auto-ttl', False)
+            and record._octodns.get('cloudflare', {}).get('auto-ttl', record.source != self and record._type != 'URLFWD' and self.auto_ttl)
         )
 
     def _record_comment(self, record):

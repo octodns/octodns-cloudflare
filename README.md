@@ -67,6 +67,8 @@ providers:
     # A different limit for (non-)enterprise zone applies.
     # See: https://developers.cloudflare.com/dns/manage-dns-records/reference/ttl
     #min_ttl: 120
+    # Optional. Default: false. Set auto-ttl to true for all records by default.
+    #auto_ttl: false
 ```
 
 Note: The "proxied" flag of "A", "AAAA" and "CNAME" records can be managed via the YAML provider like so:
