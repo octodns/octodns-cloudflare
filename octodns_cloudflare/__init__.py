@@ -864,7 +864,12 @@ class CloudflareProvider(BaseProvider):
         return (
             not self._record_is_proxied(record)
             and not self.cdn
-            and record._octodns.get('cloudflare', {}).get('auto-ttl', record.source != self and record._type != 'URLFWD' and self.auto_ttl)
+            and record._octodns.get('cloudflare', {}).get(
+                'auto-ttl',
+                record.source != self
+                and record._type != 'URLFWD'
+                and self.auto_ttl,
+            )
         )
 
     def _record_comment(self, record):
