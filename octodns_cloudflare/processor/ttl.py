@@ -2,7 +2,7 @@
 #
 #
 
-from octodns.processor.base import BaseProcessor, ProcessorException
+from octodns.processor.base import BaseProcessor
 
 from octodns_cloudflare import _PROXIABLE_RECORD_TYPES
 
