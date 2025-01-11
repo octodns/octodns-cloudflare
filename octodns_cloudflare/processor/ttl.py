@@ -2,7 +2,9 @@
 #
 #
 
-from octodns.processor.base import BaseProcessor, ProcessorException
+from octodns.processor.base import BaseProcessor
+
+from octodns_cloudflare import _PROXIABLE_RECORD_TYPES
 
 
 class TtlToProxy(BaseProcessor):
@@ -34,11 +36,12 @@ class TtlToProxy(BaseProcessor):
     def process_source_zone(self, zone, *args, **kwargs):
         for record in zone.records:
             if record.ttl == self.ttl:
+                attr = {'auto-ttl': True}
+                if record._type in _PROXIABLE_RECORD_TYPES:
+                    attr['proxied'] = True
+
                 record = record.copy()
-                record._octodns['cloudflare'] = {
-                    'proxied': True,
-                    'auto-ttl': True,
-                }
+                record._octodns['cloudflare'] = attr
                 record.ttl = 1
                 # Ensure we set to valid TTL.
                 zone.add_record(record, replace=True, lenient=True)
