@@ -1141,33 +1141,87 @@ class CloudflareProvider(BaseProvider):
             self._try_request('DELETE', path)
 
     def _apply_Delete(self, change):
+        """
+        Delete an existing record (DNS record or Pagerule) in Cloudflare.
+        
+        Raises CloudflareError if critical data (e.g., zone_id, record id) is missing,
+        so the entire sync fails rather than silently skipping.
+        """
         existing = change.existing
         existing_name = existing.fqdn[:-1]
-        # Make sure to map ALIAS to CNAME when looking for the target to delete
+        # Map ALIAS to CNAME for the purposes of deletion
         existing_type = 'CNAME' if existing._type == 'ALIAS' else existing._type
+
         for record in self.zone_records(existing.zone):
+            # Handle pagerules
             if 'targets' in record and self.pagerules:
-                uri = record['targets'][0]['constraint']['value']
+                constraint = record['targets'][0].get('constraint')
+                if not constraint or 'value' not in constraint:
+                    raise CloudflareError({
+                        'errors': [{
+                            'message': (
+                                f"Pagerule for '{existing_name}' missing "
+                                f"'constraint' or 'constraint.value'."
+                            )
+                        }]
+                    })
+
+                uri = constraint['value']
                 uri = '//' + uri if not uri.startswith('http') else uri
                 parsed_uri = urlsplit(uri)
                 record_name = parsed_uri.netloc
                 record_type = 'URLFWD'
-                zone_id = self.zones.get(existing.zone.name, False)
-                if (
-                    existing_name == record_name
-                    and existing_type == record_type
-                ):
-                    path = f'/zones/{zone_id}/pagerules/{record["id"]}'
+                zone_id = self.zones.get(existing.zone.name)
+                if not zone_id:
+                    raise CloudflareError({
+                        'errors': [{
+                            'message': (
+                                f"No zone_id found for pagerule in zone "
+                                f"{existing.zone.name}."
+                            )
+                        }]
+                    })
+
+                rule_id = record.get('id')
+                if not rule_id:
+                    raise CloudflareError({
+                        'errors': [{
+                            'message': (
+                                f"No pagerule 'id' found for record {record}."
+                            )
+                        }]
+                    })
+
+                if existing_name == record_name and existing_type == record_type:
+                    path = f'/zones/{zone_id}/pagerules/{rule_id}'
                     self._try_request('DELETE', path)
+
+            # Handle normal DNS records
             else:
                 if (
-                    existing_name == record['name']
-                    and existing_type == record['type']
+                    existing_name == record.get('name')
+                    and existing_type == record.get('type')
                 ):
-                    path = (
-                        f'/zones/{record["zone_id"]}/dns_records/'
-                        f'{record["id"]}'
-                    )
+                    zone_id = record.get('zone_id') or self.zones.get(existing.zone.name)
+                    if not zone_id:
+                        raise CloudflareError({
+                            'errors': [{
+                                'message': (
+                                    f"No zone_id found for record {record} "
+                                    f"in zone {existing.zone.name}."
+                                )
+                            }]
+                        })
+
+                    record_id = record.get('id')
+                    if not record_id:
+                        raise CloudflareError({
+                            'errors': [{
+                                'message': f"No record 'id' found for record {record}."
+                            }]
+                        })
+
+                    path = f'/zones/{zone_id}/dns_records/{record_id}'
                     self._try_request('DELETE', path)
 
     def _apply(self, plan):
