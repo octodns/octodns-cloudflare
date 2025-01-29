@@ -1,3 +1,8 @@
+## v0.0.8 - 20??-??-?? - ???
+
+* Add a zone_id lookup fallback when deleting records
+
+
 ## v0.0.7 - 2024-08-20 - DS always come second
 
 * Create DS records after their sibling NS records to appease Cloudflare's
