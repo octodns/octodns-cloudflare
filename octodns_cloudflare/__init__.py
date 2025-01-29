@@ -1145,6 +1145,7 @@ class CloudflareProvider(BaseProvider):
         existing_name = existing.fqdn[:-1]
         # Make sure to map ALIAS to CNAME when looking for the target to delete
         existing_type = 'CNAME' if existing._type == 'ALIAS' else existing._type
+        zone_id = self.zones[existing.zone.name]
         for record in self.zone_records(existing.zone):
             if 'targets' in record and self.pagerules:
                 uri = record['targets'][0]['constraint']['value']
@@ -1152,7 +1153,6 @@ class CloudflareProvider(BaseProvider):
                 parsed_uri = urlsplit(uri)
                 record_name = parsed_uri.netloc
                 record_type = 'URLFWD'
-                zone_id = self.zones.get(existing.zone.name, False)
                 if (
                     existing_name == record_name
                     and existing_type == record_type
@@ -1164,8 +1164,16 @@ class CloudflareProvider(BaseProvider):
                     existing_name == record['name']
                     and existing_type == record['type']
                 ):
+                    record_zone_id = record.get('zone_id')
+                    if record_zone_id is None:
+                        self.log.warning(
+                            '_apply_Delete: record "%s", %s is missing "zone_id", falling back to lookup',
+                            record['name'],
+                            record['type'],
+                        )
+                        record_zone_id = zone_id
                     path = (
-                        f'/zones/{record["zone_id"]}/dns_records/'
+                        f'/zones/{record_zone_id}/dns_records/'
                         f'{record["id"]}'
                     )
                     self._try_request('DELETE', path)
