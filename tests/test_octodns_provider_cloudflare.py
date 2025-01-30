@@ -1005,7 +1005,7 @@ class TestCloudflareProvider(TestCase):
         # Set things up to preexist/mock as necessary
         zone = Zone('unit.tests.', [])
         # Stuff a fake zone id in place
-        provider._zones = {zone.name: '42'}
+        provider._zones = {zone.name: {'id': '42'}}
         provider._request = Mock()
         side_effect = [
             {
@@ -2891,3 +2891,266 @@ class TestCloudflareProvider(TestCase):
         msg = str(ctx.exception)
         self.assertTrue('subber.unit.tests.' in msg)
         self.assertTrue('coresponding NS record' in msg)
+
+    def test_plan_handling(self):
+        provider = CloudflareProvider(
+            'test', 'email', 'token', 'account_id', plan_type='enterprise'
+        )
+        provider._try_request = Mock()
+
+        # Test 1: Creating new zone with plan_type
+        provider._try_request.side_effect = [
+            {
+                # GET /zones response (empty)
+                'result': [],
+                'result_info': {'count': 0, 'per_page': 50},
+            },
+            {
+                # POST /zones response
+                'result': {'id': '42', 'plan': {'legacy_id': 'enterprise'}},
+                'result_info': {'count': 1, 'per_page': 50},
+            },
+        ]
+
+        zone = Zone('unit.tests.', [])
+        plan = Plan(zone, zone, [], True)
+        provider._apply(plan)
+
+        provider._try_request.assert_has_calls(
+            [
+                call(
+                    'GET',
+                    '/zones',
+                    params={
+                        'page': 1,
+                        'per_page': 50,
+                        'account.id': 'account_id',
+                    },
+                ),
+                call(
+                    'POST',
+                    '/zones',
+                    data={
+                        'name': 'unit.tests',
+                        'jump_start': False,
+                        'account': {'id': 'account_id'},
+                        'plan': {'legacy_id': 'enterprise'},
+                    },
+                ),
+            ]
+        )
+
+        self.assertEqual(
+            provider.zones['unit.tests.'], {'id': '42', 'plan': 'enterprise'}
+        )
+
+        # Reset for next test
+        provider._try_request.reset_mock()
+
+        # Test 2: No plan update for new zone (plan is set during creation)
+        provider._try_request.side_effect = [
+            {
+                # GET /zones response (empty)
+                'result': [],
+                'result_info': {'count': 0, 'per_page': 50},
+            }
+        ]
+
+        existing = Zone('unit.tests.', [])
+        desired = Zone('unit.tests.', [])
+        changes = []
+
+        extra = provider._extra_changes(existing, desired, changes)
+        self.assertEqual(0, len(extra))  # No extra changes for new zone
+
+        # Test 3: Plan update via extra changes and apply
+        provider._zones = {'unit.tests.': {'id': '42', 'plan': 'pro'}}
+
+        extra = provider._extra_changes(existing, desired, changes)
+        self.assertEqual(1, len(extra))
+        self.assertIsInstance(extra[0], Update)
+        self.assertEqual('CF_ZONE', extra[0].new._type)
+        self.assertEqual({'plan': 'enterprise'}, extra[0].new.value)
+
+        # Test 4: Plan update fails when available plans can't be determined
+        provider._try_request.reset_mock()
+        provider._try_request.side_effect = [
+            {
+                # GET /zones/42/available_plans returns no plans
+                'result': []
+            }
+        ]
+
+        with self.assertRaises(SupportsException) as ctx:
+            provider.apply(Plan(existing, desired, changes + extra, True))
+        self.assertEqual(
+            'test: enterprise is not supported for unit.tests.',
+            str(ctx.exception),
+        )
+
+        # Test 5: Plan update fails when desired plan isn't available
+        provider._try_request.reset_mock()
+        provider._try_request.side_effect = [
+            {
+                # GET /zones/42/available_plans returns only pro plan
+                'result': [{'legacy_id': 'pro'}]
+            }
+        ]
+
+        with self.assertRaises(SupportsException) as ctx:
+            provider.apply(Plan(existing, desired, changes + extra, True))
+        self.assertEqual(
+            'test: enterprise is not supported for unit.tests.',
+            str(ctx.exception),
+        )
+
+        # Test 6: Successful plan update
+        provider._try_request.reset_mock()
+        provider._try_request.side_effect = [
+            {
+                # GET /zones/42/available_plans
+                'result': [{'legacy_id': 'pro'}, {'legacy_id': 'enterprise'}]
+            },
+            {
+                # PATCH /zones/42 (plan update)
+                'result': {'plan': {'legacy_id': 'enterprise'}}
+            },
+        ]
+
+        provider.apply(Plan(existing, desired, changes + extra, True))
+
+        provider._try_request.assert_has_calls(
+            [
+                call('GET', '/zones/42/available_plans'),
+                call(
+                    'PATCH',
+                    '/zones/42',
+                    data={'plan': {'legacy_id': 'enterprise'}},
+                ),
+            ]
+        )
+
+        # Test 7: No plan update when zone doesn't exist
+        provider._zones = {}
+        provider._try_request.reset_mock()
+        extra = provider._extra_changes(existing, desired, changes)
+        self.assertEqual(0, len(extra))
+
+        # Test 8: No plan update when plan_type is None
+        provider = CloudflareProvider(
+            'test', 'email', 'token', 'account_id', plan_type=None
+        )
+        provider._zones = {'unit.tests.': {'id': '42', 'plan': 'pro'}}
+        provider._try_request = Mock()
+
+        extra = provider._extra_changes(existing, desired, changes)
+        self.assertEqual(
+            0, len(extra)
+        )  # No extra changes when plan_type is None
+        provider._try_request.assert_not_called()  # No API calls should be made
+
+        # Test 9: No plan update when current plan matches desired plan
+        provider = CloudflareProvider(
+            'test', 'email', 'token', 'account_id', plan_type='enterprise'
+        )
+        provider._try_request = Mock()
+        provider._zones = {'unit.tests.': {'id': '42', 'plan': 'enterprise'}}
+        provider._update_plan('unit.tests.', 'enterprise')  # Should do nothing
+        provider._try_request.assert_not_called()
+
+        # Test 10: Regular record update (non-CF_ZONE)
+        provider = CloudflareProvider(
+            'test', 'email', 'token', 'account_id', plan_type='enterprise'
+        )
+        provider._try_request = Mock()
+        provider._zones = {'unit.tests.': {'id': '42', 'plan': 'pro'}}
+
+        record = Record.new(
+            existing, 'test', {'type': 'A', 'ttl': 300, 'value': '1.2.3.4'}
+        )
+
+        # Mock the zone_records method
+        provider.zone_records = Mock(
+            return_value=[
+                {
+                    'id': 'record-id',
+                    'type': 'A',
+                    'name': 'test.unit.tests',
+                    'content': '1.2.3.4',
+                    'ttl': 300,
+                    'proxied': False,
+                    'zone_id': '42',
+                }
+            ]
+        )
+
+        provider._apply_Update(Update(record, record))
+        provider._try_request.assert_called_once_with(
+            'PUT',
+            '/zones/42/dns_records/record-id',
+            data={
+                'content': '1.2.3.4',
+                'name': 'test.unit.tests',
+                'type': 'A',
+                'ttl': 300,
+                'proxied': False,
+            },
+        )
+
+        # Test 11: Plan update with empty response
+        provider._try_request = Mock()
+        provider._try_request.side_effect = [{'result': None}]
+        provider._zones = {'unit.tests.': {'id': '42', 'plan': 'pro'}}
+
+        with self.assertRaises(SupportsException) as ctx:
+            provider._update_plan('unit.tests.', 'enterprise')
+        self.assertEqual(
+            'test: unable to determine supported plans, do you have an Enterprise account?',
+            str(ctx.exception),
+        )
+
+        # Test 12: Plan update with malformed response
+        provider._try_request.side_effect = [
+            {'result': [{}]}  # Missing legacy_id
+        ]
+        with self.assertRaises(SupportsException) as ctx:
+            provider._update_plan('unit.tests.', 'enterprise')
+        self.assertEqual(
+            'test: unable to determine supported plans, do you have an Enterprise account?',
+            str(ctx.exception),
+        )
+
+        # Test 13: Create CF_ZONE record
+        provider = CloudflareProvider('test', 'email', 'token')
+        provider._update_plan = Mock()
+
+        zone = Zone('unit.tests.', [])
+        new = Record.new(
+            zone,
+            '_plan_update',
+            {'type': 'CF_ZONE', 'ttl': 300, 'value': {'plan': 'pro'}},
+        )
+
+        change = Create(new)
+        provider._apply_Create(change)
+        provider._update_plan.assert_called_once_with('unit.tests.', 'pro')
+
+        # Test 14: Delete CF_ZONE record
+        provider = CloudflareProvider('test', 'email', 'token')
+        provider._update_plan = Mock()
+
+        existing = Record.new(
+            zone,
+            '_plan_update',
+            {
+                'type': 'CF_ZONE',
+                'ttl': 300,
+                'value': {
+                    'plan': 'pro'  # Current plan doesn't matter for deletion
+                },
+            },
+        )
+
+        change = Delete(existing)
+        provider._apply_Delete(change)
+        provider._update_plan.assert_called_once_with('unit.tests.', 'free')
