@@ -17,7 +17,11 @@ from octodns.provider.yaml import YamlProvider
 from octodns.record import Create, Delete, Record, Update
 from octodns.zone import Zone
 
-from octodns_cloudflare import CloudflareProvider, CloudflareRateLimitError
+from octodns_cloudflare import (
+    CloudflareAuthenticationError,
+    CloudflareProvider,
+    CloudflareRateLimitError,
+)
 
 
 def set_record_proxied_flag(record, proxied):
@@ -2177,7 +2181,11 @@ class TestCloudflareProvider(TestCase):
 
     def test_retry_behavior(self):
         provider = CloudflareProvider(
-            'test', token='token 123', email='email 234', retry_period=0
+            'test',
+            token='token 123',
+            email='email 234',
+            retry_period=0,
+            auth_error_retry_count=2,  # Add auth retry config
         )
         result = {
             "success": True,
@@ -2198,7 +2206,7 @@ class TestCloudflareProvider(TestCase):
             [call('GET', '/zones', params={'page': 1, 'per_page': 50})]
         )
 
-        # One retry required
+        # One rate limit retry required
         provider._zones = None
         provider._request.reset_mock()
         provider._request.side_effect = [CloudflareRateLimitError('{}'), result]
@@ -2207,12 +2215,11 @@ class TestCloudflareProvider(TestCase):
             [call('GET', '/zones', params={'page': 1, 'per_page': 50})]
         )
 
-        # Two retries required
+        # One auth retry required
         provider._zones = None
         provider._request.reset_mock()
         provider._request.side_effect = [
-            CloudflareRateLimitError('{}'),
-            CloudflareRateLimitError('{}'),
+            CloudflareAuthenticationError('{}'),
             result,
         ]
         self.assertEqual([], provider.zone_records(zone))
@@ -2220,7 +2227,20 @@ class TestCloudflareProvider(TestCase):
             [call('GET', '/zones', params={'page': 1, 'per_page': 50})]
         )
 
-        # # Exhaust our retries
+        # Two retries required - mixed rate limit and auth errors
+        provider._zones = None
+        provider._request.reset_mock()
+        provider._request.side_effect = [
+            CloudflareRateLimitError('{}'),
+            CloudflareAuthenticationError('{}'),
+            result,
+        ]
+        self.assertEqual([], provider.zone_records(zone))
+        provider._request.assert_has_calls(
+            [call('GET', '/zones', params={'page': 1, 'per_page': 50})]
+        )
+
+        # Exhaust rate limit retries
         provider._zones = None
         provider._request.reset_mock()
         provider._request.side_effect = [
@@ -2233,6 +2253,29 @@ class TestCloudflareProvider(TestCase):
         with self.assertRaises(CloudflareRateLimitError) as ctx:
             provider.zone_records(zone)
             self.assertEqual('last', str(ctx.exception))
+
+        # Exhaust auth retries
+        provider._zones = None
+        provider._request.reset_mock()
+        provider._request.side_effect = [
+            CloudflareAuthenticationError({"errors": [{"message": "first"}]}),
+            CloudflareAuthenticationError({"errors": [{"message": "second"}]}),
+            CloudflareAuthenticationError({"errors": [{"message": "last"}]}),
+        ]
+        with self.assertRaises(CloudflareAuthenticationError) as ctx:
+            provider.zone_records(zone)
+            self.assertEqual('last', str(ctx.exception))
+
+        # Test with auth retries disabled (default behavior)
+        provider = CloudflareProvider(
+            'test', token='token 123', email='email 234', retry_period=0
+        )
+        provider._request = Mock()
+        provider._zones = None
+        provider._request.side_effect = [CloudflareAuthenticationError('{}')]
+        with self.assertRaises(CloudflareAuthenticationError):
+            provider.zone_records(zone)
+        self.assertEqual(1, provider._request.call_count)
 
     def test_ttl_mapping(self):
         provider = CloudflareProvider('test', 'email', 'token')
