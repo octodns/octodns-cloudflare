@@ -91,6 +91,7 @@ class CloudflareProvider(BaseProvider):
         pagerules=True,
         retry_count=4,
         retry_period=300,
+        auth_error_retry_count=0,
         zones_per_page=50,
         records_per_page=100,
         min_ttl=120,
@@ -124,6 +125,7 @@ class CloudflareProvider(BaseProvider):
         self.pagerules = pagerules
         self.retry_count = retry_count
         self.retry_period = retry_period
+        self.auth_error_retry_count = auth_error_retry_count
         self.zones_per_page = zones_per_page
         self.records_per_page = records_per_page
         self.min_ttl = min_ttl
@@ -140,6 +142,7 @@ class CloudflareProvider(BaseProvider):
 
     def _try_request(self, *args, **kwargs):
         tries = self.retry_count
+        auth_tries = self.auth_error_retry_count
         while True:  # We'll raise to break after our tries expire
             try:
                 return self._request(*args, **kwargs)
@@ -152,6 +155,17 @@ class CloudflareProvider(BaseProvider):
                     'for %ds and trying again, %d remaining',
                     self.retry_period,
                     tries,
+                )
+                sleep(self.retry_period)
+            except CloudflareAuthenticationError:
+                if auth_tries <= 0:
+                    raise
+                auth_tries -= 1
+                self.log.warning(
+                    'authentication error encountered, pausing '
+                    'for %ds and trying again, %d remaining',
+                    self.retry_period,
+                    auth_tries,
                 )
                 sleep(self.retry_period)
 
