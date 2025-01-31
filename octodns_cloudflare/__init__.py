@@ -95,6 +95,7 @@ class CloudflareProvider(BaseProvider):
         zones_per_page=50,
         records_per_page=100,
         min_ttl=120,
+        log_name_servers=False,
         *args,
         **kwargs,
     ):
@@ -129,6 +130,7 @@ class CloudflareProvider(BaseProvider):
         self.zones_per_page = zones_per_page
         self.records_per_page = records_per_page
         self.min_ttl = min_ttl
+        self.log_name_servers = log_name_servers
         self._sess = sess
 
         self._zones = None
@@ -214,7 +216,15 @@ class CloudflareProvider(BaseProvider):
                 else:
                     page = None
 
-            self._zones = IdnaDict({f'{z["name"]}.': z['id'] for z in zones})
+            self._zones = IdnaDict(
+                {
+                    f'{z["name"]}.': {
+                        'id': z['id'],
+                        'name_servers': z.get('name_servers', []),
+                    }
+                    for z in zones
+                }
+            )
 
         return self._zones
 
@@ -468,7 +478,7 @@ class CloudflareProvider(BaseProvider):
 
     def zone_records(self, zone):
         if zone.name not in self._zone_records:
-            zone_id = self.zones.get(zone.name, False)
+            zone_id = self.zones.get(zone.name, {}).get('id', False)
             if not zone_id:
                 return []
 
@@ -1016,7 +1026,7 @@ class CloudflareProvider(BaseProvider):
 
     def _apply_Create(self, change):
         new = change.new
-        zone_id = self.zones[new.zone.name]
+        zone_id = self.zones[new.zone.name]['id']
         if new._type == 'URLFWD':
             path = f'/zones/{zone_id}/pagerules'
         else:
@@ -1026,7 +1036,7 @@ class CloudflareProvider(BaseProvider):
 
     def _apply_Update(self, change):
         zone = change.new.zone
-        zone_id = self.zones[zone.name]
+        zone_id = self.zones[zone.name]['id']
         hostname = zone.hostname_from_fqdn(change.new.fqdn[:-1])
         _type = change.new._type
 
@@ -1166,7 +1176,9 @@ class CloudflareProvider(BaseProvider):
                 parsed_uri = urlsplit(uri)
                 record_name = parsed_uri.netloc
                 record_type = 'URLFWD'
-                zone_id = self.zones.get(existing.zone.name, False)
+                zone_id = self.zones.get(existing.zone.name, {}).get(
+                    'id', False
+                )
                 if (
                     existing_name == record_name
                     and existing_type == record_type
@@ -1199,8 +1211,17 @@ class CloudflareProvider(BaseProvider):
                 data['account'] = {'id': self.account_id}
             resp = self._try_request('POST', '/zones', data=data)
             zone_id = resp['result']['id']
-            self.zones[name] = zone_id
+            name_servers = resp['result']['name_servers']
+            self.zones[name] = {'id': zone_id, 'name_servers': name_servers}
             self._zone_records[name] = {}
+
+        if self.log_name_servers:
+            self.log.info(
+                'zone %s (id %s) name servers: %s',
+                name,
+                self.zones[name]['id'],
+                self.zones[name]['name_servers'],
+            )
 
         # Force the operation order to be Delete() -> Create() -> Update()
         # This will help avoid problems in updating a CNAME record into an
