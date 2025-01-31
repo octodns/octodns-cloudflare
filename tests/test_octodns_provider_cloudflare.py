@@ -138,12 +138,12 @@ class TestCloudflareProvider(TestCase):
 
         # General error
         with requests_mock() as mock:
-            mock.get(ANY, status_code=502, text='Things caught fire')
+            mock.get(ANY, status_code=500, text='Things caught fire')
 
             with self.assertRaises(HTTPError) as ctx:
                 zone = Zone('unit.tests.', [])
                 provider.populate(zone)
-            self.assertEqual(502, ctx.exception.response.status_code)
+            self.assertEqual(500, ctx.exception.response.status_code)
 
         # Rate Limit error
         with requests_mock() as mock:
@@ -181,6 +181,26 @@ class TestCloudflareProvider(TestCase):
             self.assertEqual(
                 'CloudflareRateLimitError', type(ctx.exception).__name__
             )
+            self.assertEqual('Cloudflare error', str(ctx.exception))
+
+        # 502/503 error, Cloudflare API issue
+        with requests_mock() as mock:
+            mock.get(ANY, status_code=502, text='bad gateway')
+
+            with self.assertRaises(Exception) as ctx:
+                zone = Zone('unit.tests.', [])
+                provider.populate(zone)
+
+            self.assertEqual('Cloudflare5xxError', type(ctx.exception).__name__)
+            self.assertEqual('Cloudflare error', str(ctx.exception))
+
+            mock.get(ANY, status_code=503, text='service unavailable')
+
+            with self.assertRaises(Exception) as ctx:
+                zone = Zone('unit.tests.', [])
+                provider.populate(zone)
+
+            self.assertEqual('Cloudflare5xxError', type(ctx.exception).__name__)
             self.assertEqual('Cloudflare error', str(ctx.exception))
 
         # Non-existent zone doesn't populate anything
