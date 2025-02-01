@@ -47,6 +47,11 @@ class CloudflareRateLimitError(CloudflareError):
         CloudflareError.__init__(self, data)
 
 
+class Cloudflare5xxError(CloudflareError):
+    def __init__(self, data):
+        CloudflareError.__init__(self, data)
+
+
 _PROXIABLE_RECORD_TYPES = {'A', 'AAAA', 'ALIAS', 'CNAME'}
 
 
@@ -168,6 +173,17 @@ class CloudflareProvider(BaseProvider):
                     auth_tries,
                 )
                 sleep(self.retry_period)
+            except Cloudflare5xxError:
+                if tries <= 0:
+                    raise
+                tries -= 1
+                self.log.warning(
+                    'http 502 error encountered, pausing '
+                    'for %ds and trying again, %d remaining',
+                    self.retry_period,
+                    auth_tries,
+                )
+                sleep(self.retry_period)
 
     def _request(self, method, path, params=None, data=None):
         self.log.debug('_request: method=%s, path=%s', method, path)
@@ -184,7 +200,8 @@ class CloudflareProvider(BaseProvider):
             raise CloudflareAuthenticationError(resp.json())
         if resp.status_code == 429:
             raise CloudflareRateLimitError(resp.json())
-
+        if resp.status_code in [502, 503]:
+            raise Cloudflare5xxError("http 5xx")
         resp.raise_for_status()
         return resp.json()
 
