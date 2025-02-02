@@ -372,7 +372,6 @@ class TestCloudflareProvider(TestCase):
                     "proxied": False,
                     "ttl": 300,
                     "locked": False,
-                    "zone_id": "ff12ab34cd5611334422ab3322997650",
                     "zone_name": "unit.tests",
                     "modified_on": "2017-03-11T18:01:43.420689Z",
                     "created_on": "2017-03-11T18:01:43.420689Z",
@@ -533,10 +532,10 @@ class TestCloudflareProvider(TestCase):
                     'DELETE',
                     '/zones/42/pagerules/2a9141b18ffb0e6aed826050eec970b8',
                 ),
+                # this one used the zone_id lookup fallback, thus 42
                 call(
                     'DELETE',
-                    '/zones/ff12ab34cd5611334422ab3322997650/'
-                    'dns_records/fc12ab34cd5611334422ab3322997653',
+                    '/zones/42/dns_records/fc12ab34cd5611334422ab3322997653',
                 ),
                 call(
                     'DELETE',
