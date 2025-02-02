@@ -1,7 +1,7 @@
 ## v0.0.8 - 20??-??-?? - ???
 
+* Add support for optionally retrying requests that hit 403 errors
 * Add a zone_id lookup fallback when deleting records
-
 
 ## v0.0.7 - 2024-08-20 - DS always come second
 
