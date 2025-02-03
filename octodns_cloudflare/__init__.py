@@ -181,7 +181,7 @@ class CloudflareProvider(BaseProvider):
                     'http 502 error encountered, pausing '
                     'for %ds and trying again, %d remaining',
                     self.retry_period,
-                    auth_tries,
+                    tries,
                 )
                 sleep(self.retry_period)
 
