@@ -100,7 +100,6 @@ class CloudflareProvider(BaseProvider):
         zones_per_page=50,
         records_per_page=100,
         min_ttl=120,
-        log_name_servers=False,
         *args,
         **kwargs,
     ):
@@ -135,7 +134,6 @@ class CloudflareProvider(BaseProvider):
         self.zones_per_page = zones_per_page
         self.records_per_page = records_per_page
         self.min_ttl = min_ttl
-        self.log_name_servers = log_name_servers
         self._sess = sess
 
         self._zones = None
@@ -1238,13 +1236,12 @@ class CloudflareProvider(BaseProvider):
             self.zones[name] = {'id': zone_id, 'name_servers': name_servers}
             self._zone_records[name] = {}
 
-        if self.log_name_servers:
-            self.log.info(
-                'zone %s (id %s) name servers: %s',
-                name,
-                self.zones[name]['id'],
-                self.zones[name]['name_servers'],
-            )
+        self.log.info(
+            'zone %s (id %s) name servers: %s',
+            name,
+            self.zones[name]['id'],
+            self.zones[name]['name_servers'],
+        )
 
         # Force the operation order to be Delete() -> Create() -> Update()
         # This will help avoid problems in updating a CNAME record into an
