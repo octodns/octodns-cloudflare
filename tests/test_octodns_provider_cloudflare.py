@@ -138,12 +138,12 @@ class TestCloudflareProvider(TestCase):
 
         # General error
         with requests_mock() as mock:
-            mock.get(ANY, status_code=502, text='Things caught fire')
+            mock.get(ANY, status_code=500, text='Things caught fire')
 
             with self.assertRaises(HTTPError) as ctx:
                 zone = Zone('unit.tests.', [])
                 provider.populate(zone)
-            self.assertEqual(502, ctx.exception.response.status_code)
+            self.assertEqual(500, ctx.exception.response.status_code)
 
         # Rate Limit error
         with requests_mock() as mock:
@@ -181,6 +181,26 @@ class TestCloudflareProvider(TestCase):
             self.assertEqual(
                 'CloudflareRateLimitError', type(ctx.exception).__name__
             )
+            self.assertEqual('Cloudflare error', str(ctx.exception))
+
+        # 502/503 error, Cloudflare API issue
+        with requests_mock() as mock:
+            mock.get(ANY, status_code=502, text='bad gateway')
+
+            with self.assertRaises(Exception) as ctx:
+                zone = Zone('unit.tests.', [])
+                provider.populate(zone)
+
+            self.assertEqual('Cloudflare5xxError', type(ctx.exception).__name__)
+            self.assertEqual('Cloudflare error', str(ctx.exception))
+
+            mock.get(ANY, status_code=503, text='service unavailable')
+
+            with self.assertRaises(Exception) as ctx:
+                zone = Zone('unit.tests.', [])
+                provider.populate(zone)
+
+            self.assertEqual('Cloudflare5xxError', type(ctx.exception).__name__)
             self.assertEqual('Cloudflare error', str(ctx.exception))
 
         # Non-existent zone doesn't populate anything
@@ -357,7 +377,6 @@ class TestCloudflareProvider(TestCase):
                     "proxied": False,
                     "ttl": 300,
                     "locked": False,
-                    "zone_id": "ff12ab34cd5611334422ab3322997650",
                     "zone_name": "unit.tests",
                     "modified_on": "2017-03-11T18:01:43.420689Z",
                     "created_on": "2017-03-11T18:01:43.420689Z",
@@ -518,10 +537,10 @@ class TestCloudflareProvider(TestCase):
                     'DELETE',
                     '/zones/42/pagerules/2a9141b18ffb0e6aed826050eec970b8',
                 ),
+                # this one used the zone_id lookup fallback, thus 42
                 call(
                     'DELETE',
-                    '/zones/ff12ab34cd5611334422ab3322997650/'
-                    'dns_records/fc12ab34cd5611334422ab3322997653',
+                    '/zones/42/dns_records/fc12ab34cd5611334422ab3322997653',
                 ),
                 call(
                     'DELETE',

@@ -47,6 +47,11 @@ class CloudflareRateLimitError(CloudflareError):
         CloudflareError.__init__(self, data)
 
 
+class Cloudflare5xxError(CloudflareError):
+    def __init__(self, data):
+        CloudflareError.__init__(self, data)
+
+
 _PROXIABLE_RECORD_TYPES = {'A', 'AAAA', 'ALIAS', 'CNAME'}
 
 
@@ -170,6 +175,17 @@ class CloudflareProvider(BaseProvider):
                     auth_tries,
                 )
                 sleep(self.retry_period)
+            except Cloudflare5xxError:
+                if tries <= 0:
+                    raise
+                tries -= 1
+                self.log.warning(
+                    'http 502 error encountered, pausing '
+                    'for %ds and trying again, %d remaining',
+                    self.retry_period,
+                    auth_tries,
+                )
+                sleep(self.retry_period)
 
     def _request(self, method, path, params=None, data=None):
         self.log.debug('_request: method=%s, path=%s', method, path)
@@ -186,7 +202,8 @@ class CloudflareProvider(BaseProvider):
             raise CloudflareAuthenticationError(resp.json())
         if resp.status_code == 429:
             raise CloudflareRateLimitError(resp.json())
-
+        if resp.status_code in [502, 503]:
+            raise Cloudflare5xxError("http 5xx")
         resp.raise_for_status()
         return resp.json()
 
@@ -1169,6 +1186,7 @@ class CloudflareProvider(BaseProvider):
         existing_name = existing.fqdn[:-1]
         # Make sure to map ALIAS to CNAME when looking for the target to delete
         existing_type = 'CNAME' if existing._type == 'ALIAS' else existing._type
+        zone_id = self.zones.get(existing.zone.name, {}).get('id', False)
         for record in self.zone_records(existing.zone):
             if 'targets' in record and self.pagerules:
                 uri = record['targets'][0]['constraint']['value']
@@ -1176,9 +1194,6 @@ class CloudflareProvider(BaseProvider):
                 parsed_uri = urlsplit(uri)
                 record_name = parsed_uri.netloc
                 record_type = 'URLFWD'
-                zone_id = self.zones.get(existing.zone.name, {}).get(
-                    'id', False
-                )
                 if (
                     existing_name == record_name
                     and existing_type == record_type
@@ -1190,8 +1205,16 @@ class CloudflareProvider(BaseProvider):
                     existing_name == record['name']
                     and existing_type == record['type']
                 ):
+                    record_zone_id = record.get('zone_id')
+                    if record_zone_id is None:
+                        self.log.warning(
+                            '_apply_Delete: record "%s", %s is missing "zone_id", falling back to lookup',
+                            record['name'],
+                            record['type'],
+                        )
+                        record_zone_id = zone_id
                     path = (
-                        f'/zones/{record["zone_id"]}/dns_records/'
+                        f'/zones/{record_zone_id}/dns_records/'
                         f'{record["id"]}'
                     )
                     self._try_request('DELETE', path)
