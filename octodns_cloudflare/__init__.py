@@ -1296,9 +1296,6 @@ class CloudflareProvider(BaseProvider):
                 data['account'] = {'id': self.account_id}
             resp = self._try_request('POST', '/zones', data=data)
             zone = resp['result']
-            from pprint import pprint
-
-            pprint(zone)
             self.zones[zone_name] = {
                 'id': zone['id'],
                 'cloudflare_plan': zone.get('plan', {}).get('legacy_id', None),

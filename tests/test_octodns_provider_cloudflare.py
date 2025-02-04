@@ -3,7 +3,7 @@
 #
 
 from os.path import dirname, join
-from unittest import TestCase
+from unittest import TestCase, skipIf
 from unittest.mock import Mock, call
 
 from requests import HTTPError
@@ -22,6 +22,12 @@ from octodns_cloudflare import (
     CloudflareAuthenticationError,
     CloudflareProvider,
     CloudflareRateLimitError,
+)
+
+octodns_supports_meta = tuple(int(p) for p in octodns_version.split('.')) >= (
+    1,
+    11,
+    0,
 )
 
 
@@ -700,38 +706,45 @@ class TestCloudflareProvider(TestCase):
         self.assertEqual(22, provider.apply(plan))
         self.assertFalse(plan.exists)
 
-        provider._request.assert_has_calls(
-            [
-                # created the domain
-                call(
-                    'POST',
-                    '/zones',
-                    data={
-                        'jump_start': False,
-                        'name': 'unit.tests',
-                        'account': {'id': 'account_id'},
-                    },
-                ),
-                # get available plans
-                call('GET', '/zones/42/available_plans'),
-                # update plan
-                call('PATCH', '/zones/42', data={'plan': {'id': 'plan-2'}}),
-                call(
-                    'POST',
-                    '/zones/42/dns_records',
-                    data={
-                        'content': '1.2.3.4',
-                        'name': 'unit.tests',
-                        'type': 'A',
-                        'ttl': 300,
-                        'proxied': False,
-                    },
-                ),
-            ],
-            False,
+        expected = [
+            # created the domain
+            call(
+                'POST',
+                '/zones',
+                data={
+                    'jump_start': False,
+                    'name': 'unit.tests',
+                    'account': {'id': 'account_id'},
+                },
+            )
+        ]
+        request_call_count = 36
+        if octodns_supports_meta:
+            request_call_count += 2
+            expected.extend(
+                [
+                    # get available plans
+                    call('GET', '/zones/42/available_plans'),
+                    # update plan
+                    call('PATCH', '/zones/42', data={'plan': {'id': 'plan-2'}}),
+                ]
+            )
+        expected.append(
+            call(
+                'POST',
+                '/zones/42/dns_records',
+                data={
+                    'content': '1.2.3.4',
+                    'name': 'unit.tests',
+                    'type': 'A',
+                    'ttl': 300,
+                    'proxied': False,
+                },
+            )
         )
+        provider._request.assert_has_calls(expected, False)
         # expected number of total calls
-        self.assertEqual(38, provider._request.call_count)
+        self.assertEqual(request_call_count, provider._request.call_count)
 
         # Creating new zone without plan_type
         provider = CloudflareProvider(
@@ -815,24 +828,29 @@ class TestCloudflareProvider(TestCase):
         self.assertEqual(22, len(plan.changes))
         self.assertEqual(22, provider.apply(plan))
 
-        provider._request.assert_has_calls(
-            [
-                # Get existing records
-                call(
-                    'GET',
-                    '/zones/42/dns_records',
-                    params={'page': 1, 'per_page': 100},
-                ),
-                # Get existing pagerules
-                call('GET', '/zones/42/pagerules', params={'status': 'active'}),
-                # Get available plans
-                call('GET', '/zones/42/available_plans'),
-                # Update plan
-                call('PATCH', '/zones/42', data={'plan': {'id': 'plan-2'}}),
-            ],
-            False,
-        )
-        self.assertEqual(38, provider._request.call_count)
+        request_call_count = 36
+        expected = [
+            # Get existing records
+            call(
+                'GET',
+                '/zones/42/dns_records',
+                params={'page': 1, 'per_page': 100},
+            ),
+            # Get existing pagerules
+            call('GET', '/zones/42/pagerules', params={'status': 'active'}),
+        ]
+        if octodns_supports_meta:
+            request_call_count += 2
+            expected.extend(
+                [
+                    # Get available plans
+                    call('GET', '/zones/42/available_plans'),
+                    # Update plan
+                    call('PATCH', '/zones/42', data={'plan': {'id': 'plan-2'}}),
+                ]
+            )
+        provider._request.assert_has_calls(expected, False)
+        self.assertEqual(request_call_count, provider._request.call_count)
 
         # No plan update when current plan matches
         provider = CloudflareProvider(
@@ -845,7 +863,10 @@ class TestCloudflareProvider(TestCase):
         provider._request.side_effect = [self.empty] * 2
         provider._update_plan = Mock()
         plan = provider.plan(self.expected)
-        self.assertEqual(None, plan.meta)  # No meta changes when plans match
+        if octodns_supports_meta:
+            self.assertEqual(
+                None, plan.meta
+            )  # No meta changes when plans match
         self.assertEqual(2, provider._request.call_count)
         provider._update_plan.assert_not_called()
 
@@ -860,7 +881,8 @@ class TestCloudflareProvider(TestCase):
         provider._request.side_effect = [self.empty] * 2
         provider._update_plan = Mock()
         plan = provider.plan(self.expected)
-        self.assertEqual(None, plan.meta)  # No meta when plan_type is None
+        if octodns_supports_meta:
+            self.assertEqual(None, plan.meta)  # No meta when plan_type is None
         self.assertEqual(2, provider._request.call_count)
         provider._update_plan.assert_not_called()
 
@@ -3102,6 +3124,10 @@ class TestCloudflareProvider(TestCase):
         self.assertTrue('subber.unit.tests.' in msg)
         self.assertTrue('coresponding NS record' in msg)
 
+    @skipIf(
+        not octodns_supports_meta,
+        'octodns >= 1.11.0 required to test meta support',
+    )
     def test_meta(self):
         """Test Cloudflare plan management functionality"""
 
