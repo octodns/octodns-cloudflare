@@ -245,6 +245,7 @@ class CloudflareProvider(BaseProvider):
                         'cloudflare_plan': z.get('plan', {}).get(
                             'legacy_id', None
                         ),
+                        'name_servers': z['name_servers'],
                     }
                     for z in zones
                 }
@@ -1061,7 +1062,6 @@ class CloudflareProvider(BaseProvider):
     def _apply_Update(self, change):
         zone = change.new.zone
         zone_id = self.zones[zone.name]['id']
-
         hostname = zone.hostname_from_fqdn(change.new.fqdn[:-1])
         _type = change.new._type
 
@@ -1295,12 +1295,15 @@ class CloudflareProvider(BaseProvider):
             if self.account_id is not None:
                 data['account'] = {'id': self.account_id}
             resp = self._try_request('POST', '/zones', data=data)
-            zone_id = resp['result']['id']
-            self.zones[zone_name] = {'id': zone_id}
-            cloudflare_plan = (
-                resp['result'].get('plan', {}).get('legacy_id', None)
-            )
-            self.zones[zone_name]['cloudflare_plan'] = cloudflare_plan
+            zone = resp['result']
+            from pprint import pprint
+
+            pprint(zone)
+            self.zones[zone_name] = {
+                'id': zone['id'],
+                'cloudflare_plan': zone.get('plan', {}).get('legacy_id', None),
+                'name_servers': zone['name_servers'],
+            }
             self._zone_records[zone_name] = {}
 
         # Handle plan changes if needed
@@ -1319,6 +1322,13 @@ class CloudflareProvider(BaseProvider):
                     'plan_type is set but meta is not supported by octodns %s, plan changes will not be applied',
                     octodns_version,
                 )
+
+        self.log.info(
+            'zone %s (id %s) name servers: %s',
+            zone_name,
+            self.zones[zone_name]['id'],
+            self.zones[zone_name]['name_servers'],
+        )
 
         # Force the operation order to be Delete() -> Create() -> Update()
         # This will help avoid problems in updating a CNAME record into an
