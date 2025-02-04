@@ -285,7 +285,7 @@ class TestCloudflareProvider(TestCase):
 
         provider._request.side_effect = [
             self.empty,  # no zones
-            {'result': {'id': 42}},  # zone create
+            {'result': {'id': 42, 'name_servers': ['foo']}},  # zone create
         ] + [
             None
         ] * 34  # individual record creates
@@ -595,7 +595,7 @@ class TestCloudflareProvider(TestCase):
 
         provider._request.side_effect = [
             self.empty,  # no zones
-            {'result': {'id': 42}},  # zone create
+            {'result': {'id': 42, 'name_servers': ['foo']}},  # zone create
         ] + [
             None
         ] * 34  # individual record creates
@@ -715,7 +715,7 @@ class TestCloudflareProvider(TestCase):
         provider._request.side_effect = [
             CloudflareRateLimitError('{}'),
             self.empty,  # no zones
-            {'result': {'id': 42}},  # zone create
+            {'result': {'id': 42, 'name_servers': ['foo']}},  # zone create
             None,
             None,
             None,
@@ -888,7 +888,7 @@ class TestCloudflareProvider(TestCase):
         provider._request.side_effect = [
             CloudflareRateLimitError('{}'),
             self.empty,  # no zones
-            {'result': {'id': 42}},  # zone create
+            {'result': {'id': 42, 'name_servers': ['foo']}},  # zone create
             None,
             None,
             None,
@@ -1024,7 +1024,7 @@ class TestCloudflareProvider(TestCase):
         # Set things up to preexist/mock as necessary
         zone = Zone('unit.tests.', [])
         # Stuff a fake zone id in place
-        provider._zones = {zone.name: '42'}
+        provider._zones = {zone.name: {'id': '42', 'name_servers': ['foo']}}
         provider._request = Mock()
         side_effect = [
             {

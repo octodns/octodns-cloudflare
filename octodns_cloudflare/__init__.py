@@ -231,7 +231,15 @@ class CloudflareProvider(BaseProvider):
                 else:
                     page = None
 
-            self._zones = IdnaDict({f'{z["name"]}.': z['id'] for z in zones})
+            self._zones = IdnaDict(
+                {
+                    f'{z["name"]}.': {
+                        'id': z['id'],
+                        'name_servers': z['name_servers'],
+                    }
+                    for z in zones
+                }
+            )
 
         return self._zones
 
@@ -485,7 +493,7 @@ class CloudflareProvider(BaseProvider):
 
     def zone_records(self, zone):
         if zone.name not in self._zone_records:
-            zone_id = self.zones.get(zone.name, False)
+            zone_id = self.zones.get(zone.name, {}).get('id', False)
             if not zone_id:
                 return []
 
@@ -1033,7 +1041,7 @@ class CloudflareProvider(BaseProvider):
 
     def _apply_Create(self, change):
         new = change.new
-        zone_id = self.zones[new.zone.name]
+        zone_id = self.zones[new.zone.name]['id']
         if new._type == 'URLFWD':
             path = f'/zones/{zone_id}/pagerules'
         else:
@@ -1043,7 +1051,7 @@ class CloudflareProvider(BaseProvider):
 
     def _apply_Update(self, change):
         zone = change.new.zone
-        zone_id = self.zones[zone.name]
+        zone_id = self.zones[zone.name]['id']
         hostname = zone.hostname_from_fqdn(change.new.fqdn[:-1])
         _type = change.new._type
 
@@ -1176,7 +1184,7 @@ class CloudflareProvider(BaseProvider):
         existing_name = existing.fqdn[:-1]
         # Make sure to map ALIAS to CNAME when looking for the target to delete
         existing_type = 'CNAME' if existing._type == 'ALIAS' else existing._type
-        zone_id = self.zones[existing.zone.name]
+        zone_id = self.zones.get(existing.zone.name, {}).get('id', False)
         for record in self.zone_records(existing.zone):
             if 'targets' in record and self.pagerules:
                 uri = record['targets'][0]['constraint']['value']
@@ -1224,8 +1232,16 @@ class CloudflareProvider(BaseProvider):
                 data['account'] = {'id': self.account_id}
             resp = self._try_request('POST', '/zones', data=data)
             zone_id = resp['result']['id']
-            self.zones[name] = zone_id
+            name_servers = resp['result']['name_servers']
+            self.zones[name] = {'id': zone_id, 'name_servers': name_servers}
             self._zone_records[name] = {}
+
+        self.log.info(
+            'zone %s (id %s) name servers: %s',
+            name,
+            self.zones[name]['id'],
+            self.zones[name]['name_servers'],
+        )
 
         # Force the operation order to be Delete() -> Create() -> Update()
         # This will help avoid problems in updating a CNAME record into an
