@@ -235,7 +235,7 @@ class CloudflareProvider(BaseProvider):
                 {
                     f'{z["name"]}.': {
                         'id': z['id'],
-                        'name_servers': z.get('name_servers', []),
+                        'name_servers': z['name_servers'],
                     }
                     for z in zones
                 }
