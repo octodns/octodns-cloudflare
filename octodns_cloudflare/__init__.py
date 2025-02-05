@@ -29,6 +29,7 @@ __version__ = __VERSION__ = '0.0.7'
 
 
 class CloudflareError(ProviderException):
+
     def __init__(self, data):
         try:
             message = data['errors'][0]['message']
@@ -38,16 +39,19 @@ class CloudflareError(ProviderException):
 
 
 class CloudflareAuthenticationError(CloudflareError):
+
     def __init__(self, data):
         CloudflareError.__init__(self, data)
 
 
 class CloudflareRateLimitError(CloudflareError):
+
     def __init__(self, data):
         CloudflareError.__init__(self, data)
 
 
 class Cloudflare5xxError(CloudflareError):
+
     def __init__(self, data):
         CloudflareError.__init__(self, data)
 
@@ -94,6 +98,7 @@ class CloudflareProvider(BaseProvider):
         account_id=None,
         cdn=False,
         pagerules=True,
+        plan_type=None,
         retry_count=4,
         retry_period=300,
         auth_error_retry_count=0,
@@ -105,11 +110,12 @@ class CloudflareProvider(BaseProvider):
     ):
         self.log = getLogger(f'CloudflareProvider[{id}]')
         self.log.debug(
-            '__init__: id=%s, email=%s, token=***, account_id=%s, cdn=%s',
+            '__init__: id=%s, email=%s, token=***, account_id=%s, cdn=%s, plan=%s',
             id,
             email,
             account_id,
             cdn,
+            plan_type,
         )
         super().__init__(id, *args, **kwargs)
 
@@ -128,6 +134,7 @@ class CloudflareProvider(BaseProvider):
         self.account_id = account_id
         self.cdn = cdn
         self.pagerules = pagerules
+        self.plan_type = plan_type
         self.retry_count = retry_count
         self.retry_period = retry_period
         self.auth_error_retry_count = auth_error_retry_count
@@ -235,6 +242,9 @@ class CloudflareProvider(BaseProvider):
                 {
                     f'{z["name"]}.': {
                         'id': z['id'],
+                        'cloudflare_plan': z.get('plan', {}).get(
+                            'legacy_id', None
+                        ),
                         'name_servers': z['name_servers'],
                     }
                     for z in zones
@@ -1184,7 +1194,7 @@ class CloudflareProvider(BaseProvider):
         existing_name = existing.fqdn[:-1]
         # Make sure to map ALIAS to CNAME when looking for the target to delete
         existing_type = 'CNAME' if existing._type == 'ALIAS' else existing._type
-        zone_id = self.zones.get(existing.zone.name, {}).get('id', False)
+        zone_id = self.zones[existing.zone.name]['id']
         for record in self.zone_records(existing.zone):
             if 'targets' in record and self.pagerules:
                 uri = record['targets'][0]['constraint']['value']
@@ -1217,30 +1227,104 @@ class CloudflareProvider(BaseProvider):
                     )
                     self._try_request('DELETE', path)
 
+    def _available_plans(self, zone_name):
+        zone_id = self.zones.get(zone_name, {}).get('id', None)
+        if not zone_id:
+            msg = f'{self.id}: zone {zone_name} not found'
+            raise SupportsException(msg)
+        path = f'/zones/{zone_id}/available_plans'
+        resp = self._try_request('GET', path)
+        result = resp['result']
+        if not isinstance(result, list):
+            msg = f'{self.id}: unable to determine supported plans, do you have an Enterprise account?'
+            raise SupportsException(msg)
+        return {
+            plan['legacy_id']: plan['id']
+            for plan in result
+            if plan['legacy_id'] is not None
+        }
+
+    def _resolve_plan_legacy_id(self, zone_name, legacy_id):
+        # Get the plan id for the given legacy_id, Cloudflare only supports setting the plan by id
+        plan_id = self._available_plans(zone_name).get(legacy_id, None)
+        if not plan_id:
+            msg = f'{self.id}: {legacy_id} is not supported for {zone_name}'
+            raise SupportsException(msg)
+        return plan_id
+
+    def _update_plan(self, zone_name, legacy_id):
+        plan_id = self._resolve_plan_legacy_id(zone_name, legacy_id)
+        zone_id = self.zones[zone_name]['id']
+        data = {'plan': {'id': plan_id}}
+        resp = self._try_request('PATCH', f'/zones/{zone_id}', data=data)
+        # Update the cached plan information
+        self.zones[zone_name]['cloudflare_plan'] = resp['result']['plan'][
+            'legacy_id'
+        ]
+
+    def _plan_meta(self, existing, desired, changes):
+        desired_plan = self.plan_type
+        if desired_plan is None:
+            # No plan type configured leave things unmanaged
+            return
+        zone_name = desired.name
+        current_plan = self.zones.get(zone_name, {}).get(
+            'cloudflare_plan', None
+        )
+        if current_plan == desired_plan:
+            return
+        return {
+            'cloudflare_plan': {
+                'current': current_plan,
+                'desired': desired_plan,
+            }
+        }
+
     def _apply(self, plan):
         desired = plan.desired
         changes = plan.changes
+        zone_name = desired.name
+
         self.log.debug(
-            '_apply: zone=%s, len(changes)=%d', desired.name, len(changes)
+            '_apply: zone=%s, len(changes)=%d', zone_name, len(changes)
         )
 
-        name = desired.name
-        if name not in self.zones:
+        if zone_name not in self.zones:
             self.log.debug('_apply:   no matching zone, creating')
-            data = {'name': name[:-1], 'jump_start': False}
+            data = {'name': zone_name[:-1], 'jump_start': False}
             if self.account_id is not None:
                 data['account'] = {'id': self.account_id}
             resp = self._try_request('POST', '/zones', data=data)
-            zone_id = resp['result']['id']
-            name_servers = resp['result']['name_servers']
-            self.zones[name] = {'id': zone_id, 'name_servers': name_servers}
-            self._zone_records[name] = {}
+            zone = resp['result']
+            self.zones[zone_name] = {
+                'id': zone['id'],
+                'cloudflare_plan': zone.get('plan', {}).get('legacy_id', None),
+                'name_servers': zone['name_servers'],
+            }
+            self._zone_records[zone_name] = {}
+
+        # Handle plan changes if needed
+        if self.plan_type is not None:
+            if hasattr(plan, 'meta'):
+                meta = plan.meta
+                if meta:
+                    desired_plan = meta.get('cloudflare_plan', {}).get(
+                        'desired', None
+                    )
+                    if desired_plan:
+                        self._update_plan(zone_name, desired_plan)
+            else:
+                # Older versions of octodns don't have meta support.
+                self.log.warning(
+                    'plan_type is set but meta is not supported by octodns %s, plan changes will not be applied',
+                    octodns_version,
+                )
 
         self.log.info(
             'zone %s (id %s) name servers: %s',
-            name,
-            self.zones[name]['id'],
-            self.zones[name]['name_servers'],
+            zone_name,
+            self.zones[zone_name]['id'],
+            self.zones[zone_name]['name_servers'],
         )
 
         # Force the operation order to be Delete() -> Create() -> Update()
@@ -1253,7 +1337,7 @@ class CloudflareProvider(BaseProvider):
             getattr(self, f'_apply_{class_name}')(change)
 
         # clear the cache
-        self._zone_records.pop(name, None)
+        self._zone_records.pop(zone_name, None)
 
     def _extra_changes(self, existing, desired, changes):
         extra_changes = []

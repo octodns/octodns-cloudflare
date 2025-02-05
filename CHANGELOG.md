@@ -2,6 +2,7 @@
 
 * Add support for optionally retrying requests that hit 403 errors
 * Add a zone_id lookup fallback when deleting records
+* Add support for setting Cloudflare plan type for zones
 
 ## v0.0.7 - 2024-08-20 - DS always come second
 
