@@ -7,10 +7,6 @@
       "paused": false,
       "type": "full",
       "development_mode": 0,
-      "name_servers": [
-        "alice.ns.cloudflare.com",
-        "tom.ns.cloudflare.com"
-      ],
       "original_name_servers": [],
       "original_registrar": null,
       "original_dnshost": null,

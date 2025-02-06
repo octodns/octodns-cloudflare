@@ -292,7 +292,7 @@ class TestCloudflareProvider(TestCase):
 
         provider._request.side_effect = [
             self.empty,  # no zones
-            {'result': {'id': 42, 'name_servers': ['foo']}},  # zone create
+            {'result': {'id': 42}},  # zone create
         ] + [
             None
         ] * 34  # individual record creates
@@ -803,7 +803,7 @@ class TestCloudflareProvider(TestCase):
             'unit.tests.': {
                 'id': '42',
                 'cloudflare_plan': 'pro',
-                'name_servers': ['foo'],
+                'name_servers': [],
             }
         }
 
