@@ -245,7 +245,7 @@ class CloudflareProvider(BaseProvider):
                         'cloudflare_plan': z.get('plan', {}).get(
                             'legacy_id', None
                         ),
-                        'name_servers': z['name_servers'],
+                        'name_servers': z.get('name_servers', []),
                     }
                     for z in zones
                 }
@@ -1299,7 +1299,7 @@ class CloudflareProvider(BaseProvider):
             self.zones[zone_name] = {
                 'id': zone['id'],
                 'cloudflare_plan': zone.get('plan', {}).get('legacy_id', None),
-                'name_servers': zone['name_servers'],
+                'name_servers': zone.get('name_servers', []),
             }
             self._zone_records[zone_name] = {}
 

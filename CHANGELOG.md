@@ -1,8 +1,6 @@
-## v0.0.8 - 2025-02-06 - More options
+## v0.0.9 - 2025-02-06 - Unknown nameservers are a thing
 
-* Add support for optionally retrying requests that hit 403 errors
-* Add a zone_id lookup fallback when deleting records
-* Add support for setting Cloudflare plan type for zones
+* Handle cases where Cloudflare doesn't return a zones name servers.
 
 ## v0.0.7 - 2024-08-20 - DS always come second
 
