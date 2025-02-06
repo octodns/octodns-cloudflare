@@ -1,4 +1,4 @@
-## v0.0.8 - 20??-??-?? - ???
+## v0.0.8 - 2025-02-06 - More options
 
 * Add support for optionally retrying requests that hit 403 errors
 * Add a zone_id lookup fallback when deleting records
