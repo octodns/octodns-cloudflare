@@ -280,12 +280,11 @@ class CloudflareProvider(BaseProvider):
     _data_for_SPF = _data_for_multiple
 
     def _data_for_TXT(self, _type, records):
+        values = [r.get('content', '').replace(';', '\\;') for r in records]
         return {
             'ttl': self._ttl_data(records[0]['ttl']),
             'type': _type,
-            'values': [
-                r.get('content', '').replace(';', '\\;') for r in records
-            ],
+            'values': [f'"{v}"' for v in values],
         }
 
     def _data_for_CAA(self, _type, records):
@@ -719,6 +718,13 @@ class CloudflareProvider(BaseProvider):
                 dses[record.name] = record
             elif record._type == 'NS':
                 nses.add(record.name)
+            elif record._type == 'TXT':
+                # CF does not like TXT records without quotes, so we need to add them
+                # if they are not already there.
+                for i in range(len(record.values)):
+                    value = record.values[i]
+                    if not value.startswith('"') and not value.endswith('"'):
+                        record.values[i] = f'"{value}"'
 
         for name, record in dses.items():
             if name not in nses:

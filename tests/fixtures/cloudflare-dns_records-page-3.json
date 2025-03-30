@@ -171,7 +171,7 @@
       "id": "fc12ab34cd5612345422ab3322997664",
       "type": "TXT",
       "name": "txt.gíthub.com",
-      "content": "IDNA test data",
+      "content": "\"IDNA test data\"",
       "proxiable": false,
       "proxied": false,
       "ttl": 600,
