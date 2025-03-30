@@ -280,11 +280,12 @@ class CloudflareProvider(BaseProvider):
     _data_for_SPF = _data_for_multiple
 
     def _data_for_TXT(self, _type, records):
-        values = [r.get('content', '').replace(';', '\\;') for r in records]
         return {
             'ttl': self._ttl_data(records[0]['ttl']),
             'type': _type,
-            'values': [f'"{v}"' for v in values],
+            'values': [
+                r.get('content', '').replace(';', '\\;') for r in records
+            ],
         }
 
     def _data_for_CAA(self, _type, records):
@@ -718,13 +719,6 @@ class CloudflareProvider(BaseProvider):
                 dses[record.name] = record
             elif record._type == 'NS':
                 nses.add(record.name)
-            elif record._type == 'TXT':
-                # CF does not like TXT records without quotes, so we need to add them
-                # if they are not already there.
-                for i in range(len(record.values)):
-                    value = record.values[i]
-                    if not value.startswith('"') and not value.endswith('"'):
-                        record.values[i] = f'"{value}"'
 
         for name, record in dses.items():
             if name not in nses:
@@ -767,7 +761,10 @@ class CloudflareProvider(BaseProvider):
 
     def _contents_for_TXT(self, record):
         for value in record.values:
-            yield {'content': value.replace('\\;', ';')}
+            content = value.replace('\\;', ';')
+            if not value.startswith('"') and not value.endswith('"'):
+                content = f'"{content}"'
+            yield {'content': content}
 
     def _contents_for_CNAME(self, record):
         yield {'content': record.value}

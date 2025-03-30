@@ -1547,14 +1547,13 @@ class TestCloudflareProvider(TestCase):
             'TXT', [{'ttl': 42, 'content': 'hello world'}]
         )
 
-        # validate with double quotes, as this is how it need to be sent to the CF API
         self.assertEqual(
-            {"ttl": 42, "type": "TXT", "values": ["\"hello world\""]}, data
+            {'ttl': 42, 'type': 'TXT', 'values': ['hello world']}, data
         )
 
         # missing content, equivilent to empty from CF
         data = provider._data_for_TXT('TXT', [{'ttl': 42}])
-        self.assertEqual({"ttl": 42, "type": "TXT", "values": ["\"\""]}, data)
+        self.assertEqual({'ttl': 42, 'type': 'TXT', 'values': ['']}, data)
 
     def test_alias(self):
         provider = CloudflareProvider('test', 'email', 'token')
