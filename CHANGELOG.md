@@ -1,3 +1,7 @@
+## v0.0.10 - 2025-??-?? - ???
+
+* Correctly quote and chunk TXT records to match Cloudflare's internal behavior
+
 ## v0.0.9 - 2025-02-06 - Unknown nameservers are a thing
 
 * Handle cases where Cloudflare doesn't return a zones name servers.

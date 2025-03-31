@@ -760,11 +760,8 @@ class CloudflareProvider(BaseProvider):
             }
 
     def _contents_for_TXT(self, record):
-        for value in record.values:
-            content = value.replace('\\;', ';')
-            if not value.startswith('"') and not value.endswith('"'):
-                content = f'"{content}"'
-            yield {'content': content}
+        for chunked in record.chunked_values:
+            yield {'content': chunked.replace('\\;', ';')}
 
     def _contents_for_CNAME(self, record):
         yield {'content': record.value}
