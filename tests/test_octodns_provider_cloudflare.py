@@ -1564,10 +1564,13 @@ class TestCloudflareProvider(TestCase):
         data = list(provider._contents_for_TXT(record))
         self.assertEqual([{'content': '"test-value-without-quotes"'}], data)
 
-        # Update value within record to allow testing with quotes
-        record.values[0] = '"test-value-with-quotes"'
-        data = list(provider._contents_for_TXT(record))
-        self.assertEqual([{'content': '"test-value-with-quotes"'}], data)
+        # really long txt value
+        txt = 'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.'
+        zone = Zone('unit.tests.', [])
+        record = Record.new(zone, '', {'type': 'TXT', 'ttl': 300, 'value': txt})
+        chunked = record.chunked_values[0]
+        data = next(provider._contents_for_TXT(record))
+        self.assertEqual({'content': chunked}, data)
 
     def test_alias(self):
         provider = CloudflareProvider('test', 'email', 'token')
