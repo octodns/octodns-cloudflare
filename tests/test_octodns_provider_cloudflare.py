@@ -4,7 +4,7 @@
 
 from os.path import dirname, join
 from unittest import TestCase, skipIf
-from unittest.mock import Mock, call
+from unittest.mock import Mock, call, patch
 
 from requests import HTTPError
 from requests_mock import ANY
@@ -3088,7 +3088,16 @@ class TestCloudflareProvider(TestCase):
             (0, 'subber', 'NS'), provider._change_keyer(Delete(ns))
         )
 
-    def test_process_desired_zone(self):
+    @patch('octodns_cloudflare.BaseProvider._process_desired_zone')
+    def test_process_desired_zone(self, mock_base_process_desired_zone):
+        def mock_base_process_desired_zone_impl(desired):
+            desired._base_process_desired_zone = True
+            return desired
+
+        mock_base_process_desired_zone.side_effect = (
+            mock_base_process_desired_zone_impl
+        )
+
         provider = CloudflareProvider(
             'test', 'email', 'token', strict_supports=False
         )
@@ -3119,19 +3128,29 @@ class TestCloudflareProvider(TestCase):
         desired = zone.copy()
         desired.add_record(ds)
         desired.add_record(ns)
-        self.assertEqual(
-            {ds, ns}, provider._process_desired_zone(desired).records
-        )
+        result = provider._process_desired_zone(desired)
+        mock_base_process_desired_zone.assert_called_once_with(desired)
+        mock_base_process_desired_zone.reset_mock()
+        self.assertTrue(result._base_process_desired_zone)
+        self.assertEqual({ds, ns}, result.records)
 
         # just NS
         desired = zone.copy()
         desired.add_record(ns)
-        self.assertEqual({ns}, provider._process_desired_zone(desired).records)
+        result = provider._process_desired_zone(desired)
+        mock_base_process_desired_zone.assert_called_once_with(desired)
+        mock_base_process_desired_zone.reset_mock()
+        self.assertTrue(result._base_process_desired_zone)
+        self.assertEqual({ns}, result.records)
 
         # just DS, will be removed
         desired = zone.copy()
         desired.add_record(ds)
-        self.assertEqual(set(), provider._process_desired_zone(desired).records)
+        result = provider._process_desired_zone(desired)
+        mock_base_process_desired_zone.assert_called_once_with(desired)
+        mock_base_process_desired_zone.reset_mock()
+        self.assertTrue(result._base_process_desired_zone)
+        self.assertEqual(set(), result.records)
 
         # when in strict mode will error
         provider.strict_supports = True
@@ -3140,6 +3159,7 @@ class TestCloudflareProvider(TestCase):
         with self.assertRaises(SupportsException) as ctx:
             provider._process_desired_zone(desired)
         msg = str(ctx.exception)
+        mock_base_process_desired_zone.assert_not_called()
         self.assertTrue('subber.unit.tests.' in msg)
         self.assertTrue('coresponding NS record' in msg)
 
