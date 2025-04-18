@@ -727,7 +727,7 @@ class CloudflareProvider(BaseProvider):
                 self.supports_warn_or_except(msg, fallback)
                 desired.remove_record(record)
 
-        return desired
+        return super()._process_desired_zone(desired)
 
     def _contents_for_multiple(self, record):
         for value in record.values:
