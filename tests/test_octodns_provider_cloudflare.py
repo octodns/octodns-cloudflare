@@ -3093,7 +3093,10 @@ class TestCloudflareProvider(TestCase):
         def mock_base_process_desired_zone_impl(desired):
             desired._base_process_desired_zone = True
             return desired
-        mock_base_process_desired_zone.side_effect = mock_base_process_desired_zone_impl
+
+        mock_base_process_desired_zone.side_effect = (
+            mock_base_process_desired_zone_impl
+        )
 
         provider = CloudflareProvider(
             'test', 'email', 'token', strict_supports=False
@@ -3129,9 +3132,7 @@ class TestCloudflareProvider(TestCase):
         mock_base_process_desired_zone.assert_called_once_with(desired)
         mock_base_process_desired_zone.reset_mock()
         self.assertTrue(result._base_process_desired_zone)
-        self.assertEqual(
-            {ds, ns}, result.records
-        )
+        self.assertEqual({ds, ns}, result.records)
 
         # just NS
         desired = zone.copy()
