@@ -41,7 +41,7 @@ class TtlToProxy(BaseProcessor):
                     attr['proxied'] = True
 
                 record = record.copy()
-                record._octodns['cloudflare'] = attr
+                record.octodns['cloudflare'] = attr
                 record.ttl = 1
                 # Ensure we set to valid TTL.
                 zone.add_record(record, replace=True, lenient=True)

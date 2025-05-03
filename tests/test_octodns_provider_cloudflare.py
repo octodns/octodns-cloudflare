@@ -33,36 +33,36 @@ octodns_supports_meta = tuple(int(p) for p in octodns_version.split('.')) >= (
 
 def set_record_proxied_flag(record, proxied):
     try:
-        record._octodns['cloudflare']['proxied'] = proxied
+        record.octodns['cloudflare']['proxied'] = proxied
     except KeyError:
-        record._octodns['cloudflare'] = {'proxied': proxied}
+        record.octodns['cloudflare'] = {'proxied': proxied}
 
     return record
 
 
 def set_record_auto_ttl_flag(record, auto_ttl):
     try:
-        record._octodns['cloudflare']['auto-ttl'] = auto_ttl
+        record.octodns['cloudflare']['auto-ttl'] = auto_ttl
     except KeyError:
-        record._octodns['cloudflare'] = {'auto-ttl': auto_ttl}
+        record.octodns['cloudflare'] = {'auto-ttl': auto_ttl}
 
     return record
 
 
 def set_record_comment(record, comment):
     try:
-        record._octodns['cloudflare']['comment'] = comment
+        record.octodns['cloudflare']['comment'] = comment
     except KeyError:
-        record._octodns['cloudflare'] = {'comment': comment}
+        record.octodns['cloudflare'] = {'comment': comment}
 
     return record
 
 
 def set_record_tags(record, tags):
     try:
-        record._octodns['cloudflare']['tags'] = tags
+        record.octodns['cloudflare']['tags'] = tags
     except KeyError:
-        record._octodns['cloudflare'] = {'tags': tags}
+        record.octodns['cloudflare'] = {'tags': tags}
 
     return record
 
@@ -86,7 +86,7 @@ class TestCloudflareProvider(TestCase):
     )
     for record in list(expected.records):
         if record.name == 'sub' and record._type == 'NS':
-            expected._remove_record(record)
+            expected.remove_record(record)
             break
 
     empty = {'result': [], 'result_info': {'count': 0, 'per_page': 0}}
@@ -271,17 +271,17 @@ class TestCloudflareProvider(TestCase):
 
             zone = Zone('unit.tests.', [])
             provider.populate(zone)
-            self.assertEqual(25, len(zone.records))
+            self.assertEqual(24, len(zone.records))
 
             changes = self.expected.changes(zone, provider)
 
-            # delete a urlfwd, create 3 urlfwd, and create 1 spf, delete 1 NS
-            self.assertEqual(10, len(changes))
+            # delete a urlfwd, create 3 urlfwd, delete 1 NS
+            self.assertEqual(9, len(changes))
 
         # re-populating the same zone/records comes out of cache, no calls
         again = Zone('unit.tests.', [])
         provider.populate(again)
-        self.assertEqual(25, len(again.records))
+        self.assertEqual(24, len(again.records))
 
     def test_apply(self):
         provider = CloudflareProvider(
@@ -1909,8 +1909,8 @@ class TestCloudflareProvider(TestCase):
 
         record = provider._record_for(zone, name, _type, zone_records, False)
 
-        self.assertFalse(record._octodns.get('auto-ttl', False))
-        self.assertFalse(record._octodns.get('proxied', False))
+        self.assertFalse(record.octodns.get('auto-ttl', False))
+        self.assertFalse(record.octodns.get('proxied', False))
 
     def test_proxiabletype_recordfor_retrecordwithcloudflareunproxied(self):
         provider = CloudflareProvider('test', 'email', 'token')
@@ -1940,7 +1940,7 @@ class TestCloudflareProvider(TestCase):
         record = provider._record_for(zone, name, _type, zone_records, False)
 
         self.assertFalse(
-            record._octodns.get('cloudflare', {}).get('proxied', False)
+            record.octodns.get('cloudflare', {}).get('proxied', False)
         )
 
     def test_proxiabletype_recordfor_returnsrecordwithcloudflareproxied(self):
@@ -1970,8 +1970,8 @@ class TestCloudflareProvider(TestCase):
 
         record = provider._record_for(zone, name, _type, zone_records, False)
 
-        self.assertTrue(record._octodns['cloudflare']['auto-ttl'])
-        self.assertTrue(record._octodns['cloudflare']['proxied'])
+        self.assertTrue(record.octodns['cloudflare']['auto-ttl'])
+        self.assertTrue(record.octodns['cloudflare']['proxied'])
 
     def test_record_for_auto_ttl_no_proxied(self):
         provider = CloudflareProvider('test', 'email', 'token')
@@ -1998,8 +1998,8 @@ class TestCloudflareProvider(TestCase):
         zone = Zone('unit.tests.', [])
         record = provider._record_for(zone, name, _type, zone_records, False)
 
-        self.assertTrue(record._octodns['cloudflare']['auto-ttl'])
-        self.assertFalse(record._octodns['cloudflare'].get('proxied', False))
+        self.assertTrue(record.octodns['cloudflare']['auto-ttl'])
+        self.assertFalse(record.octodns['cloudflare'].get('proxied', False))
 
     def test_proxiedrecordandnewttl_includechange_returnsfalse(self):
         provider = CloudflareProvider('test', 'email', 'token')
@@ -2354,10 +2354,10 @@ class TestCloudflareProvider(TestCase):
         self.assertEqual(1, len(extra_changes))
         self.assertFalse(
             extra_changes[0]
-            .existing._octodns.get('cloudflare', {})
+            .existing.octodns.get('cloudflare', {})
             .get('proxied', False)
         )
-        self.assertTrue(extra_changes[0].new._octodns['cloudflare']['proxied'])
+        self.assertTrue(extra_changes[0].new.octodns['cloudflare']['proxied'])
 
     def test_unproxify_extrachanges_returnsupdatelist(self):
         provider = CloudflareProvider('test', 'email', 'token')
@@ -2409,11 +2409,11 @@ class TestCloudflareProvider(TestCase):
 
         self.assertEqual(1, len(extra_changes))
         self.assertTrue(
-            extra_changes[0].existing._octodns['cloudflare']['proxied']
+            extra_changes[0].existing.octodns['cloudflare']['proxied']
         )
         self.assertFalse(
             extra_changes[0]
-            .new._octodns.get('cloudflare', {})
+            .new.octodns.get('cloudflare', {})
             .get('proxied', False)
         )
 
@@ -2591,36 +2591,6 @@ class TestCloudflareProvider(TestCase):
 
         key = provider._gen_key(cf_data)
         self.assertEqual('1 1 1 aa424242424242424242424242424242', key)
-
-    def test_no_spf_create(self):
-        provider = CloudflareProvider('test', 'email', 'token', retry_period=0)
-
-        zone = Zone('unit.tests.', [])
-        a1 = Record.new(
-            zone, 'a', {'type': 'A', 'ttl': 420, 'value': '1.2.3.4'}
-        )
-        a2 = a1.copy()
-        a2.ttl += 1
-        spf1 = Record.new(
-            zone, 'spf', {'type': 'SPF', 'ttl': 430, 'value': 'blahblah'}
-        )
-        spf2 = spf1.copy()
-        spf2.ttl += 1
-
-        # A is always included
-        self.assertTrue(provider._include_change(Create(a1)))
-        self.assertTrue(provider._include_change(Update(a1, a2)))
-        self.assertTrue(provider._include_change(Delete(a1)))
-
-        # SPF can't be created, updates and deletes are OK
-        with self.assertRaises(SupportsException) as ctx:
-            provider._include_change(Create(spf1))
-        self.assertEqual(
-            'test: creating new SPF records not supported, use TXT instead',
-            str(ctx.exception),
-        )
-        self.assertTrue(provider._include_change(Update(spf1, spf2)))
-        self.assertTrue(provider._include_change(Delete(spf1)))
 
     def test_sshfp(self):
         self.maxDiff = None
@@ -2854,12 +2824,12 @@ class TestCloudflareProvider(TestCase):
         self.assertEqual(1, len(extra_changes))
         self.assertEqual(
             extra_changes[0]
-            .existing._octodns.get('cloudflare', {})
+            .existing.octodns.get('cloudflare', {})
             .get('tags', []),
             [],
         )
         self.assertEqual(
-            extra_changes[0].new._octodns['cloudflare']['tags'],
+            extra_changes[0].new.octodns['cloudflare']['tags'],
             ['testing:abc', 'abc:testing'],
         )
 
@@ -2912,12 +2882,12 @@ class TestCloudflareProvider(TestCase):
         self.assertEqual(1, len(extra_changes))
         self.assertEqual(
             extra_changes[0]
-            .existing._octodns.get('cloudflare', {})
+            .existing.octodns.get('cloudflare', {})
             .get('tags', []),
             ["testing:abc", "abc:testing"],
         )
         self.assertEqual(
-            sorted(extra_changes[0].new._octodns['cloudflare']['tags']),
+            sorted(extra_changes[0].new.octodns['cloudflare']['tags']),
             sorted(["one:abc", "abc:testing"]),
         )
 
@@ -2983,12 +2953,12 @@ class TestCloudflareProvider(TestCase):
         self.assertEqual(1, len(extra_changes))
         self.assertEqual(
             extra_changes[0]
-            .existing._octodns.get('cloudflare', {})
+            .existing.octodns.get('cloudflare', {})
             .get('comment', ''),
             '',
         )
         self.assertEqual(
-            extra_changes[0].new._octodns['cloudflare']['comment'],
+            extra_changes[0].new.octodns['cloudflare']['comment'],
             'a new comment',
         )
 
@@ -3041,12 +3011,12 @@ class TestCloudflareProvider(TestCase):
         self.assertEqual(1, len(extra_changes))
         self.assertEqual(
             extra_changes[0]
-            .existing._octodns.get('cloudflare', {})
+            .existing.octodns.get('cloudflare', {})
             .get('comment', ''),
             'an existing comment',
         )
         self.assertEqual(
-            extra_changes[0].new._octodns['cloudflare']['comment'],
+            extra_changes[0].new.octodns['cloudflare']['comment'],
             'a new comment',
         )
 
