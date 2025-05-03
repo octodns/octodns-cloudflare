@@ -54,9 +54,15 @@ providers:
     #cdn: false
     # Manage Page Rules (URLFWD) records
     # pagerules: true
+    # Optional. Define Cloudflare plan type for the zones. Default: free,
+    # options: free, pro, business, enterprise
+    #plan_type: free
     # Optional. Default: 4. Number of times to retry if a 429 response
     # is received.
     #retry_count: 4
+    # Optional. Default: 0. Number of times to retry if a 403 response
+    # is received.
+    #auth_error_retry_count: 0
     # Optional. Default: 300. Number of seconds to wait before retrying.
     #retry_period: 300
     # Optional. Default: 50. Number of zones per page.

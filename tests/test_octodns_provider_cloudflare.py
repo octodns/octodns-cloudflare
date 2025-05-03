@@ -3,13 +3,14 @@
 #
 
 from os.path import dirname, join
-from unittest import TestCase
-from unittest.mock import Mock, call
+from unittest import TestCase, skipIf
+from unittest.mock import Mock, call, patch
 
 from requests import HTTPError
 from requests_mock import ANY
 from requests_mock import mock as requests_mock
 
+from octodns import __VERSION__ as octodns_version
 from octodns.idna import idna_encode
 from octodns.provider import SupportsException
 from octodns.provider.base import Plan
@@ -17,7 +18,17 @@ from octodns.provider.yaml import YamlProvider
 from octodns.record import Create, Delete, Record, Update
 from octodns.zone import Zone
 
-from octodns_cloudflare import CloudflareProvider, CloudflareRateLimitError
+from octodns_cloudflare import (
+    CloudflareAuthenticationError,
+    CloudflareProvider,
+    CloudflareRateLimitError,
+)
+
+octodns_supports_meta = tuple(int(p) for p in octodns_version.split('.')) >= (
+    1,
+    11,
+    0,
+)
 
 
 def set_record_proxied_flag(record, proxied):
@@ -134,12 +145,12 @@ class TestCloudflareProvider(TestCase):
 
         # General error
         with requests_mock() as mock:
-            mock.get(ANY, status_code=502, text='Things caught fire')
+            mock.get(ANY, status_code=500, text='Things caught fire')
 
             with self.assertRaises(HTTPError) as ctx:
                 zone = Zone('unit.tests.', [])
                 provider.populate(zone)
-            self.assertEqual(502, ctx.exception.response.status_code)
+            self.assertEqual(500, ctx.exception.response.status_code)
 
         # Rate Limit error
         with requests_mock() as mock:
@@ -177,6 +188,26 @@ class TestCloudflareProvider(TestCase):
             self.assertEqual(
                 'CloudflareRateLimitError', type(ctx.exception).__name__
             )
+            self.assertEqual('Cloudflare error', str(ctx.exception))
+
+        # 502/503 error, Cloudflare API issue
+        with requests_mock() as mock:
+            mock.get(ANY, status_code=502, text='bad gateway')
+
+            with self.assertRaises(Exception) as ctx:
+                zone = Zone('unit.tests.', [])
+                provider.populate(zone)
+
+            self.assertEqual('Cloudflare5xxError', type(ctx.exception).__name__)
+            self.assertEqual('Cloudflare error', str(ctx.exception))
+
+            mock.get(ANY, status_code=503, text='service unavailable')
+
+            with self.assertRaises(Exception) as ctx:
+                zone = Zone('unit.tests.', [])
+                provider.populate(zone)
+
+            self.assertEqual('Cloudflare5xxError', type(ctx.exception).__name__)
             self.assertEqual('Cloudflare error', str(ctx.exception))
 
         # Non-existent zone doesn't populate anything
@@ -291,16 +322,17 @@ class TestCloudflareProvider(TestCase):
                         'ttl': 3600,
                     },
                 ),
-                # make sure semicolons are not escaped when sending data
+                # make sure semicolons are not escaped when sending data and the
+                # correct double quotes escapes are used so it is accepted by CF
                 call(
                     'POST',
                     '/zones/42/dns_records',
                     data={
-                        'content': 'v=DKIM1;k=rsa;s=email;h=sha256;'
-                        'p=A/kinda+of/long/string+with+numb3rs',
-                        'type': 'TXT',
-                        'name': 'txt.unit.tests',
-                        'ttl': 600,
+                        "content": "\"v=DKIM1;k=rsa;s=email;h=sha256;"
+                        "p=A/kinda+of/long/string+with+numb3rs\"",
+                        "type": "TXT",
+                        "name": "txt.unit.tests",
+                        "ttl": 600,
                     },
                 ),
                 # create at least one pagerules
@@ -348,7 +380,6 @@ class TestCloudflareProvider(TestCase):
                     "proxied": False,
                     "ttl": 300,
                     "locked": False,
-                    "zone_id": "ff12ab34cd5611334422ab3322997650",
                     "zone_name": "unit.tests",
                     "modified_on": "2017-03-11T18:01:43.420689Z",
                     "created_on": "2017-03-11T18:01:43.420689Z",
@@ -509,10 +540,10 @@ class TestCloudflareProvider(TestCase):
                     'DELETE',
                     '/zones/42/pagerules/2a9141b18ffb0e6aed826050eec970b8',
                 ),
+                # this one used the zone_id lookup fallback, thus 42
                 call(
                     'DELETE',
-                    '/zones/ff12ab34cd5611334422ab3322997650/'
-                    'dns_records/fc12ab34cd5611334422ab3322997653',
+                    '/zones/42/dns_records/fc12ab34cd5611334422ab3322997653',
                 ),
                 call(
                     'DELETE',
@@ -572,7 +603,7 @@ class TestCloudflareProvider(TestCase):
 
         provider._request.side_effect = [
             self.empty,  # no zones
-            {'result': {'id': 42}},  # zone create
+            {'result': {'id': 42, 'name_servers': ['foo']}},  # zone create
         ] + [
             None
         ] * 34  # individual record creates
@@ -611,11 +642,11 @@ class TestCloudflareProvider(TestCase):
                     'POST',
                     '/zones/42/dns_records',
                     data={
-                        'content': 'v=DKIM1;k=rsa;s=email;h=sha256;'
-                        'p=A/kinda+of/long/string+with+numb3rs',
-                        'type': 'TXT',
-                        'name': 'txt.unit.tests',
-                        'ttl': 600,
+                        "content": "\"v=DKIM1;k=rsa;s=email;h=sha256;"
+                        "p=A/kinda+of/long/string+with+numb3rs\"",
+                        "type": "TXT",
+                        "name": "txt.unit.tests",
+                        "ttl": 600,
                     },
                 ),
                 # create at least one pagerules
@@ -649,6 +680,212 @@ class TestCloudflareProvider(TestCase):
         )
         # expected number of total calls
         self.assertEqual(36, provider._request.call_count)
+
+        # Creating new zone with plan_type
+        provider = CloudflareProvider(
+            'test', 'email', 'token', 'account_id', plan_type='enterprise'
+        )
+
+        provider._request = Mock()
+        provider._request.side_effect = [
+            self.empty,  # no zones
+            {'result': {'id': 42, 'name_servers': ['foo']}},  # zone create
+            {
+                'result': [
+                    {'legacy_id': 'free', 'id': 'plan-1'},
+                    {'legacy_id': 'enterprise', 'id': 'plan-2'},
+                ]
+            },  # available plans
+            {'result': {'plan': {'legacy_id': 'enterprise'}}},  # plan update
+        ] + [
+            self.empty
+        ] * 34  # individual record creates
+
+        # non-existent zone, create everything
+        plan = provider.plan(self.expected)
+        self.assertEqual(22, len(plan.changes))
+        self.assertEqual(22, provider.apply(plan))
+        self.assertFalse(plan.exists)
+
+        expected = [
+            # created the domain
+            call(
+                'POST',
+                '/zones',
+                data={
+                    'jump_start': False,
+                    'name': 'unit.tests',
+                    'account': {'id': 'account_id'},
+                },
+            )
+        ]
+        request_call_count = 36
+        if octodns_supports_meta:
+            request_call_count += 2
+            expected.extend(
+                [
+                    # get available plans
+                    call('GET', '/zones/42/available_plans'),
+                    # update plan
+                    call('PATCH', '/zones/42', data={'plan': {'id': 'plan-2'}}),
+                ]
+            )
+        expected.append(
+            call(
+                'POST',
+                '/zones/42/dns_records',
+                data={
+                    'content': '1.2.3.4',
+                    'name': 'unit.tests',
+                    'type': 'A',
+                    'ttl': 300,
+                    'proxied': False,
+                },
+            )
+        )
+        provider._request.assert_has_calls(expected, False)
+        # expected number of total calls
+        self.assertEqual(request_call_count, provider._request.call_count)
+
+        # Creating new zone without plan_type
+        provider = CloudflareProvider(
+            'test', 'email', 'token', 'account_id', plan_type=None
+        )
+
+        provider._request = Mock()
+        provider._request.side_effect = [
+            self.empty,  # no zones
+            {'result': {'id': 42, 'name_servers': ['foo']}},  # zone create
+        ] + [
+            self.empty
+        ] * 34  # individual record creates
+
+        # non-existent zone, create everything
+        plan = provider.plan(self.expected)
+        self.assertEqual(22, len(plan.changes))
+        self.assertEqual(22, provider.apply(plan))
+        self.assertFalse(plan.exists)
+
+        provider._request.assert_has_calls(
+            [
+                # created the domain
+                call(
+                    'POST',
+                    '/zones',
+                    data={
+                        'jump_start': False,
+                        'name': 'unit.tests',
+                        'account': {'id': 'account_id'},
+                    },
+                ),
+                # no call to get available plans or update plan here
+                call(
+                    'POST',
+                    '/zones/42/dns_records',
+                    data={
+                        'content': '1.2.3.4',
+                        'name': 'unit.tests',
+                        'type': 'A',
+                        'ttl': 300,
+                        'proxied': False,
+                    },
+                ),
+            ],
+            False,
+        )
+        # expected number of total calls
+        self.assertEqual(36, provider._request.call_count)
+
+        # Plan update when current plan differs
+        provider = CloudflareProvider(
+            'test', 'email', 'token', 'account_id', plan_type='enterprise'
+        )
+        provider._zones = {
+            'unit.tests.': {
+                'id': '42',
+                'cloudflare_plan': 'pro',
+                'name_servers': [],
+            }
+        }
+
+        provider._request = Mock()
+        provider._request.side_effect = [
+            self.empty,
+            self.empty,
+            # Get available plans
+            {
+                'result': [
+                    {'legacy_id': 'pro', 'id': 'plan-1'},
+                    {'legacy_id': 'enterprise', 'id': 'plan-2'},
+                ]
+            },
+            # Update plan
+            {'result': {'plan': {'legacy_id': 'enterprise'}}},
+        ] + [
+            self.empty
+        ] * 34  # Create new records
+
+        plan = provider.plan(self.expected)
+        self.assertEqual(22, len(plan.changes))
+        self.assertEqual(22, provider.apply(plan))
+
+        request_call_count = 36
+        expected = [
+            # Get existing records
+            call(
+                'GET',
+                '/zones/42/dns_records',
+                params={'page': 1, 'per_page': 100},
+            ),
+            # Get existing pagerules
+            call('GET', '/zones/42/pagerules', params={'status': 'active'}),
+        ]
+        if octodns_supports_meta:
+            request_call_count += 2
+            expected.extend(
+                [
+                    # Get available plans
+                    call('GET', '/zones/42/available_plans'),
+                    # Update plan
+                    call('PATCH', '/zones/42', data={'plan': {'id': 'plan-2'}}),
+                ]
+            )
+        provider._request.assert_has_calls(expected, False)
+        self.assertEqual(request_call_count, provider._request.call_count)
+
+        # No plan update when current plan matches
+        provider = CloudflareProvider(
+            'test', 'email', 'token', 'account_id', plan_type='enterprise'
+        )
+        provider._zones = {
+            'unit.tests.': {'id': '42', 'cloudflare_plan': 'enterprise'}
+        }
+        provider._request = Mock()
+        provider._request.side_effect = [self.empty] * 2
+        provider._update_plan = Mock()
+        plan = provider.plan(self.expected)
+        if octodns_supports_meta:
+            self.assertEqual(
+                None, plan.meta
+            )  # No meta changes when plans match
+        self.assertEqual(2, provider._request.call_count)
+        provider._update_plan.assert_not_called()
+
+        # No plan meta when plan_type is None
+        provider = CloudflareProvider(
+            'test', 'email', 'token', 'account_id', plan_type=None
+        )
+        provider._zones = {
+            'unit.tests.': {'id': '42', 'cloudflare_plan': 'pro'}
+        }
+        provider._request = Mock()
+        provider._request.side_effect = [self.empty] * 2
+        provider._update_plan = Mock()
+        plan = provider.plan(self.expected)
+        if octodns_supports_meta:
+            self.assertEqual(None, plan.meta)  # No meta when plan_type is None
+        self.assertEqual(2, provider._request.call_count)
+        provider._update_plan.assert_not_called()
 
     def test_update_add_swap(self):
         provider = CloudflareProvider('test', 'email', 'token', retry_period=0)
@@ -692,7 +929,7 @@ class TestCloudflareProvider(TestCase):
         provider._request.side_effect = [
             CloudflareRateLimitError('{}'),
             self.empty,  # no zones
-            {'result': {'id': 42}},  # zone create
+            {'result': {'id': 42, 'name_servers': ['foo']}},  # zone create
             None,
             None,
             None,
@@ -865,7 +1102,7 @@ class TestCloudflareProvider(TestCase):
         provider._request.side_effect = [
             CloudflareRateLimitError('{}'),
             self.empty,  # no zones
-            {'result': {'id': 42}},  # zone create
+            {'result': {'id': 42, 'name_servers': ['foo']}},  # zone create
             None,
             None,
             None,
@@ -1001,7 +1238,7 @@ class TestCloudflareProvider(TestCase):
         # Set things up to preexist/mock as necessary
         zone = Zone('unit.tests.', [])
         # Stuff a fake zone id in place
-        provider._zones = {zone.name: '42'}
+        provider._zones = {zone.name: {'id': '42', 'name_servers': ['foo']}}
         provider._request = Mock()
         side_effect = [
             {
@@ -1309,6 +1546,7 @@ class TestCloudflareProvider(TestCase):
         data = provider._data_for_TXT(
             'TXT', [{'ttl': 42, 'content': 'hello world'}]
         )
+
         self.assertEqual(
             {'ttl': 42, 'type': 'TXT', 'values': ['hello world']}, data
         )
@@ -1316,6 +1554,23 @@ class TestCloudflareProvider(TestCase):
         # missing content, equivilent to empty from CF
         data = provider._data_for_TXT('TXT', [{'ttl': 42}])
         self.assertEqual({'ttl': 42, 'type': 'TXT', 'values': ['']}, data)
+
+        zone = Zone('unit.tests.', [])
+        record = Record.new(
+            zone,
+            '',
+            {'type': 'TXT', 'ttl': 300, 'value': 'test-value-without-quotes'},
+        )
+        data = list(provider._contents_for_TXT(record))
+        self.assertEqual([{'content': '"test-value-without-quotes"'}], data)
+
+        # really long txt value
+        txt = 'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.'
+        zone = Zone('unit.tests.', [])
+        record = Record.new(zone, '', {'type': 'TXT', 'ttl': 300, 'value': txt})
+        chunked = record.chunked_values[0]
+        data = next(provider._contents_for_TXT(record))
+        self.assertEqual({'content': chunked}, data)
 
     def test_alias(self):
         provider = CloudflareProvider('test', 'email', 'token')
@@ -2177,7 +2432,11 @@ class TestCloudflareProvider(TestCase):
 
     def test_retry_behavior(self):
         provider = CloudflareProvider(
-            'test', token='token 123', email='email 234', retry_period=0
+            'test',
+            token='token 123',
+            email='email 234',
+            retry_period=0,
+            auth_error_retry_count=2,  # Add auth retry config
         )
         result = {
             "success": True,
@@ -2198,7 +2457,7 @@ class TestCloudflareProvider(TestCase):
             [call('GET', '/zones', params={'page': 1, 'per_page': 50})]
         )
 
-        # One retry required
+        # One rate limit retry required
         provider._zones = None
         provider._request.reset_mock()
         provider._request.side_effect = [CloudflareRateLimitError('{}'), result]
@@ -2207,12 +2466,11 @@ class TestCloudflareProvider(TestCase):
             [call('GET', '/zones', params={'page': 1, 'per_page': 50})]
         )
 
-        # Two retries required
+        # One auth retry required
         provider._zones = None
         provider._request.reset_mock()
         provider._request.side_effect = [
-            CloudflareRateLimitError('{}'),
-            CloudflareRateLimitError('{}'),
+            CloudflareAuthenticationError('{}'),
             result,
         ]
         self.assertEqual([], provider.zone_records(zone))
@@ -2220,7 +2478,20 @@ class TestCloudflareProvider(TestCase):
             [call('GET', '/zones', params={'page': 1, 'per_page': 50})]
         )
 
-        # # Exhaust our retries
+        # Two retries required - mixed rate limit and auth errors
+        provider._zones = None
+        provider._request.reset_mock()
+        provider._request.side_effect = [
+            CloudflareRateLimitError('{}'),
+            CloudflareAuthenticationError('{}'),
+            result,
+        ]
+        self.assertEqual([], provider.zone_records(zone))
+        provider._request.assert_has_calls(
+            [call('GET', '/zones', params={'page': 1, 'per_page': 50})]
+        )
+
+        # Exhaust rate limit retries
         provider._zones = None
         provider._request.reset_mock()
         provider._request.side_effect = [
@@ -2233,6 +2504,29 @@ class TestCloudflareProvider(TestCase):
         with self.assertRaises(CloudflareRateLimitError) as ctx:
             provider.zone_records(zone)
             self.assertEqual('last', str(ctx.exception))
+
+        # Exhaust auth retries
+        provider._zones = None
+        provider._request.reset_mock()
+        provider._request.side_effect = [
+            CloudflareAuthenticationError({"errors": [{"message": "first"}]}),
+            CloudflareAuthenticationError({"errors": [{"message": "second"}]}),
+            CloudflareAuthenticationError({"errors": [{"message": "last"}]}),
+        ]
+        with self.assertRaises(CloudflareAuthenticationError) as ctx:
+            provider.zone_records(zone)
+            self.assertEqual('last', str(ctx.exception))
+
+        # Test with auth retries disabled (default behavior)
+        provider = CloudflareProvider(
+            'test', token='token 123', email='email 234', retry_period=0
+        )
+        provider._request = Mock()
+        provider._zones = None
+        provider._request.side_effect = [CloudflareAuthenticationError('{}')]
+        with self.assertRaises(CloudflareAuthenticationError):
+            provider.zone_records(zone)
+        self.assertEqual(1, provider._request.call_count)
 
     def test_ttl_mapping(self):
         provider = CloudflareProvider('test', 'email', 'token')
@@ -2764,7 +3058,16 @@ class TestCloudflareProvider(TestCase):
             (0, 'subber', 'NS'), provider._change_keyer(Delete(ns))
         )
 
-    def test_process_desired_zone(self):
+    @patch('octodns_cloudflare.BaseProvider._process_desired_zone')
+    def test_process_desired_zone(self, mock_base_process_desired_zone):
+        def mock_base_process_desired_zone_impl(desired):
+            desired._base_process_desired_zone = True
+            return desired
+
+        mock_base_process_desired_zone.side_effect = (
+            mock_base_process_desired_zone_impl
+        )
+
         provider = CloudflareProvider(
             'test', 'email', 'token', strict_supports=False
         )
@@ -2795,19 +3098,29 @@ class TestCloudflareProvider(TestCase):
         desired = zone.copy()
         desired.add_record(ds)
         desired.add_record(ns)
-        self.assertEqual(
-            {ds, ns}, provider._process_desired_zone(desired).records
-        )
+        result = provider._process_desired_zone(desired)
+        mock_base_process_desired_zone.assert_called_once_with(desired)
+        mock_base_process_desired_zone.reset_mock()
+        self.assertTrue(result._base_process_desired_zone)
+        self.assertEqual({ds, ns}, result.records)
 
         # just NS
         desired = zone.copy()
         desired.add_record(ns)
-        self.assertEqual({ns}, provider._process_desired_zone(desired).records)
+        result = provider._process_desired_zone(desired)
+        mock_base_process_desired_zone.assert_called_once_with(desired)
+        mock_base_process_desired_zone.reset_mock()
+        self.assertTrue(result._base_process_desired_zone)
+        self.assertEqual({ns}, result.records)
 
         # just DS, will be removed
         desired = zone.copy()
         desired.add_record(ds)
-        self.assertEqual(set(), provider._process_desired_zone(desired).records)
+        result = provider._process_desired_zone(desired)
+        mock_base_process_desired_zone.assert_called_once_with(desired)
+        mock_base_process_desired_zone.reset_mock()
+        self.assertTrue(result._base_process_desired_zone)
+        self.assertEqual(set(), result.records)
 
         # when in strict mode will error
         provider.strict_supports = True
@@ -2816,5 +3129,165 @@ class TestCloudflareProvider(TestCase):
         with self.assertRaises(SupportsException) as ctx:
             provider._process_desired_zone(desired)
         msg = str(ctx.exception)
+        mock_base_process_desired_zone.assert_not_called()
         self.assertTrue('subber.unit.tests.' in msg)
         self.assertTrue('coresponding NS record' in msg)
+
+    @skipIf(
+        not octodns_supports_meta,
+        'octodns >= 1.11.0 required to test meta support',
+    )
+    def test_meta(self):
+        """Test Cloudflare plan management functionality"""
+
+        # New zone defaults to None in meta
+        provider = CloudflareProvider(
+            'test', 'email', 'token', 'account_id', plan_type='enterprise'
+        )
+        provider._zones = {}  # Zone doesn't exist yet
+
+        plan = provider.plan(self.expected)
+        self.assertEqual(
+            {'cloudflare_plan': {'current': None, 'desired': 'enterprise'}},
+            plan.meta,
+        )
+
+        # Zone not found when getting available plans
+        provider = CloudflareProvider(
+            'test', 'email', 'token', 'account_id', plan_type='enterprise'
+        )
+        provider._zones = {}  # Empty zones to simulate zone not found
+
+        with self.assertRaises(SupportsException) as ctx:
+            provider._available_plans('unit.tests.')
+
+        self.assertEqual(str(ctx.exception), 'test: zone unit.tests. not found')
+
+        # Non-list response when getting available plans
+        provider = CloudflareProvider(
+            'test', 'email', 'token', 'account_id', plan_type='enterprise'
+        )
+        provider._zones = {'unit.tests.': {'id': '42'}}
+        provider._try_request = Mock()
+        provider._try_request.return_value = {
+            'result': {'error': 'not authorized'}  # Non-list response
+        }
+
+        with self.assertRaises(SupportsException) as ctx:
+            provider._available_plans('unit.tests.')
+
+        self.assertEqual(
+            str(ctx.exception),
+            'test: unable to determine supported plans, do you have an Enterprise account?',
+        )
+
+        # Unsupported plan type
+        provider = CloudflareProvider(
+            'test', 'email', 'token', 'account_id', plan_type='unsupported_plan'
+        )
+        provider._zones = {'unit.tests.': {'id': '42'}}
+        provider._try_request = Mock()
+        provider._try_request.return_value = {
+            'result': [
+                {'legacy_id': 'pro', 'id': 'plan-1'},
+                {'legacy_id': 'enterprise', 'id': 'plan-2'},
+            ]
+        }
+
+        with self.assertRaises(SupportsException) as ctx:
+            provider._resolve_plan_legacy_id('unit.tests.', 'unsupported_plan')
+
+        self.assertEqual(
+            str(ctx.exception),
+            'test: unsupported_plan is not supported for unit.tests.',
+        )
+
+        # Older octodns version without meta support
+        provider = CloudflareProvider(
+            'test', 'email', 'token', 'account_id', plan_type='enterprise'
+        )
+        provider._zones = {
+            'unit.tests.': {
+                'id': '42',
+                'cloudflare_plan': 'pro',
+                'name_servers': ['foo'],
+            }
+        }
+        provider._update_plan = Mock()
+        provider._request = Mock()
+        provider._request.side_effect = [self.empty] * 36  # Create new records
+        provider.log = Mock()
+
+        plan = provider.plan(self.expected)
+        delattr(plan, 'meta')  # Remove meta attribute to simulate older octodns
+        provider.apply(plan)
+        self.assertEqual(36, provider._request.call_count)
+        provider._update_plan.assert_not_called()
+
+        provider.log.warning.assert_called_once_with(
+            'plan_type is set but meta is not supported by octodns %s, plan changes will not be applied',
+            octodns_version,
+        )
+
+        # Empty meta
+        provider = CloudflareProvider(
+            'test', 'email', 'token', 'account_id', plan_type='enterprise'
+        )
+        provider._zones = {
+            'unit.tests.': {
+                'id': '42',
+                'cloudflare_plan': 'pro',
+                'name_servers': ['foo'],
+            }
+        }
+        provider._update_plan = Mock()
+        provider._request = Mock()
+        provider._request.side_effect = [self.empty] * 36
+
+        plan = provider.plan(self.expected)
+        plan.meta = {}  # Override meta to be empty
+        provider.apply(plan)
+        self.assertEqual(36, provider._request.call_count)
+        provider._update_plan.assert_not_called()
+
+        # Meta without cloudflare_plan
+        provider = CloudflareProvider(
+            'test', 'email', 'token', 'account_id', plan_type='enterprise'
+        )
+        provider._zones = {
+            'unit.tests.': {
+                'id': '42',
+                'cloudflare_plan': 'pro',
+                'name_servers': ['foo'],
+            }
+        }
+        provider._update_plan = Mock()
+        provider._request = Mock()
+        provider._request.side_effect = [self.empty] * 36
+
+        plan = provider.plan(self.expected)
+        plan.meta = {'other_key': 'value'}  # Override meta with unrelated data
+        provider.apply(plan)
+        self.assertEqual(36, provider._request.call_count)
+        provider._update_plan.assert_not_called()
+
+        # Meta with cloudflare_plan but no desired plan
+        provider = CloudflareProvider(
+            'test', 'email', 'token', 'account_id', plan_type='enterprise'
+        )
+        provider._zones = {
+            'unit.tests.': {
+                'id': '42',
+                'cloudflare_plan': 'pro',
+                'name_servers': ['foo'],
+            }
+        }
+        provider._update_plan = Mock()
+        provider._request = Mock()
+        provider._request.side_effect = [self.empty] * 36
+
+        plan = provider.plan(self.expected)
+        plan.meta = {'cloudflare_plan': {'current': 'pro'}}  # No desired plan
+        provider.apply(plan)
+        self.assertEqual(36, provider._request.call_count)
+        provider._update_plan.assert_not_called()
