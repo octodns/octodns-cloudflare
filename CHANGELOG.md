@@ -1,4 +1,4 @@
-## v1.0.0 - 2024-??-?? - ???
+## v1.0.0 - 2025-05-03 - Long overdue 1.0
 
 Noteworthy Changes:
 
