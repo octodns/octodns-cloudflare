@@ -1677,6 +1677,25 @@ class TestCloudflareProvider(TestCase):
                     'type': 'SVCB',
                 },
             ),
+            (
+                '2371 13 2 BE74359954660069D5C63D200C39F5603827D7DD02B56F120EE9F3A86764247C',
+                {
+                    'data': {
+                        'algorithm': 13,
+                        'digest': 'BE74359954660069D5C63D200C39F5603827D7DD02B56F120EE9F3A86764247C',
+                        'digest_type': 2,
+                        'key_tag': 2371,
+                    },
+                    'type': 'DS',
+                },
+            ),
+            (
+                '2371 13 2 BE74359954660069D5C63D200C39F5603827D7DD02B56F120EE9F3A86764247C',
+                {
+                    'content': '2371 13 2 BE74359954660069D5C63D200C39F5603827D7DD02B56F120EE9F3A86764247C',
+                    'type': 'DS',
+                },
+            ),
         ):
             self.assertEqual(expected, provider._gen_key(data))
 

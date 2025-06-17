@@ -1042,6 +1042,13 @@ class CloudflareProvider(BaseProvider):
                 f'{parsed_uri.netloc} {parsed_uri.path} {url} '
                 + f'{status_code}'
             )
+        elif _type == 'DS' and 'content' not in data:
+            data = data['data']
+            key_tag = data['key_tag']
+            algorithm = data['algorithm']
+            digest_type = data['digest_type']
+            digest = data['digest']
+            return f'{key_tag} {algorithm} {digest_type} {digest}'
 
         return data['content']
 
