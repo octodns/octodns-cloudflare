@@ -91,7 +91,7 @@ name:
     value: 1.2.3.4
 ```
 
-Note: All record types support "auto" ttl, which is effectively equivalent to 300s:
+Note: All record types support "auto" ttl, which is effectively equivalent to 300s.
 
 ```yaml
 name:

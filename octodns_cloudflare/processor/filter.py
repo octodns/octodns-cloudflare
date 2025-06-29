@@ -2,14 +2,11 @@
 #
 #
 
-from abc import ABCMeta, abstractmethod
-
 from octodns.processor.base import BaseProcessor
 from octodns.processor.filter import AllowsMixin, RejectsMixin
 
 
-# TODO: Use octodns.processor.filter._FilterProcessor?
-class _FilterProcessor(BaseProcessor, metaclass=ABCMeta):
+class _FilterProcessor(BaseProcessor):
     def __init__(self, name, include_target=True, **kwargs):
         super().__init__(name, **kwargs)
         self.include_target = include_target
@@ -21,10 +18,6 @@ class _FilterProcessor(BaseProcessor, metaclass=ABCMeta):
         if self.include_target:
             return self._process(existing, *args, **kwargs)
         return existing
-
-    @abstractmethod
-    def _process(self, zone, *args, **kwargs):
-        pass  # pragma: no cover
 
 
 class _TagBaseFilter(_FilterProcessor):
