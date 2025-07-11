@@ -1,3 +1,8 @@
+## v1.?.? - 2025-??-?? - ???
+
+* Add TagAllowListFilter and TagRejectListFilter processors to enable
+  including/ignoring records based on Cloudflare tagging.
+
 ## v1.0.0 - 2025-05-03 - Long overdue 1.0
 
 Noteworthy Changes:
