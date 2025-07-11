@@ -104,6 +104,20 @@ name:
     value: 1.2.3.4
 ```
 
+Note: All record types also support tagging, which can be combined with the tag [processor](#processors) to support advanced filtering scenarios.
+
+```yaml
+name:
+    octodns:
+        cloudflare:
+            tags:
+              - "managed-by:terraform"
+              - "team:engineering"
+    ttl: 120
+    type: A
+    value: 1.2.3.4
+```
+
 ### Support Information
 
 #### Records
@@ -136,10 +150,12 @@ In the past the CloudflareProvider had a fixed minimum TTL set to 120 seconds an
 
 ### Processors
 
-| Processor | Description |
-|--|--|
-| [ProxyCNAME](/octodns_cloudflare/processor/proxycname.py) | Allows Cloudflare proxied records to be used on other providers without exposing the proxied record value. Points other providers to the relevant `.cdn.cloudflare.net` subdomain. Useful to allow split authority with a secondary provider while still retaining Cloudflare benefits for certain records. |
-| [TtlToProxy ](/octodns_cloudflare/processor/ttl.py) | Ensure Cloudflare's proxy status is setup depending on the TTL set for the record. This can be helpful for `octodns_bind.ZoneFileSource` or the like. |
+| Processor                                                      | Description                                                                                                                                                                                                                                                                                                 |
+|----------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| [ProxyCNAME](/octodns_cloudflare/processor/proxycname.py)      | Allows Cloudflare proxied records to be used on other providers without exposing the proxied record value. Points other providers to the relevant `.cdn.cloudflare.net` subdomain. Useful to allow split authority with a secondary provider while still retaining Cloudflare benefits for certain records. |
+| [TagAllowListFilter](/octodns_cloudflare/processor/filter.py)  | Filter that ONLY manages records with the specified tags, all others will be ignored. Useful for grouping records across zones (e.g. by team, department) so that they can be managed independently.                                                                                                        |
+| [TagRejectListFilter](/octodns_cloudflare/processor/filter.py) | Filter that IGNORES records with the specified tags, all others will be managed. Useful for filtering out specific records that are that are managed externally (e.g. through Terraform).                                                                                                                   |
+| [TtlToProxy ](/octodns_cloudflare/processor/ttl.py)            | Ensure Cloudflare's proxy status is setup depending on the TTL set for the record. This can be helpful for `octodns_bind.ZoneFileSource` or the like.                                                                                                                                                       |
 
 ### Developement
 
