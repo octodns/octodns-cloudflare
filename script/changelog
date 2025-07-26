@@ -1,0 +1,16 @@
+#!/bin/sh
+set -e
+
+cd "$(dirname "$0")/.."
+ROOT=$(pwd)
+
+if [ -z "$VENV_NAME" ]; then
+    VENV_NAME="env"
+fi
+
+ACTIVATE="$VENV_NAME/bin/activate"
+if [ -f "$ACTIVATE" ]; then
+    . "$ACTIVATE"
+fi
+
+changelet "$@"
