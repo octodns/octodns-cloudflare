@@ -9,4 +9,4 @@ dist/
 env/
 htmlcov/
 nosetests.xml
-octodns_*.egg-info/
+octodns_cloudflare*.egg-info/

@@ -5,6 +5,6 @@ SCRIPT_PATH="$( dirname -- "$( readlink -f -- "${0}"; )"; )"
 # Activate OctoDNS Python venv
 source "${SCRIPT_PATH}/common.sh"
 
-SOURCES="octodns_cloudflare/*.py setup.py tests/*.py"
+SOURCES="$(find *.py octodns_cloudflare tests -name "*.py") $(grep --files-with-matches '^#!.*python' script/*)"
 
 pyflakes $SOURCES

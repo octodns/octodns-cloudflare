@@ -1,11 +1,11 @@
 #!/bin/bash
 
-set -o pipefail
-
 # Get current script path
 SCRIPT_PATH="$( dirname -- "$( readlink -f -- "${0}"; )"; )"
 # Activate OctoDNS Python venv
 source "${SCRIPT_PATH}/common.sh"
+
+set -o pipefail
 
 PYPYRC="$HOME/.pypirc"
 if [ ! -e "$PYPYRC" ]; then
@@ -19,9 +19,6 @@ $PYPYRC does not exist, please create it with the following contents
 EndOfMessage
     exit 1
 fi
-
-# Set so that setup.py will create a public release style version number
-export OCTODNS_RELEASE=1
 
 VERSION="$(grep "^__version__" "octodns_cloudflare/__init__.py" | sed -e "s/.* = '//" -e "s/'$//")"
 
