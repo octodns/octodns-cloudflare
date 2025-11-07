@@ -104,6 +104,7 @@ class CloudflareProvider(BaseProvider):
         zones_per_page=50,
         records_per_page=100,
         min_ttl=120,
+        timeout=TIMEOUT,
         *args,
         **kwargs,
     ):
@@ -140,6 +141,7 @@ class CloudflareProvider(BaseProvider):
         self.zones_per_page = zones_per_page
         self.records_per_page = records_per_page
         self.min_ttl = min_ttl
+        self.timeout = timeout
         self._sess = sess
 
         self._zones = None
@@ -196,7 +198,7 @@ class CloudflareProvider(BaseProvider):
 
         url = f'https://api.cloudflare.com/client/v4{path}'
         resp = self._sess.request(
-            method, url, params=params, json=data, timeout=self.TIMEOUT
+            method, url, params=params, json=data, timeout=self.timeout
         )
         self.log.debug('_request:   status=%d', resp.status_code)
         if resp.status_code == 400:
