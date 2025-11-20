@@ -28,7 +28,6 @@ pytest \
   --cov=$SOURCE_DIR \
   --cov-fail-under=100 \
   --cov-report=html \
-  --cov-report=json \
   --cov-report=xml \
   --cov-report=term \
   --cov-branch \
