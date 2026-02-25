@@ -2465,19 +2465,14 @@ class TestCloudflareProvider(TestCase):
         # Verify the custom URL is used in actual requests
         with requests_mock() as mock:
             base = f'{custom_url}/zones'
-            mock.get(
-                f'{base}?page=1',
-                status_code=200,
-                json=self.empty,
-            )
+            mock.get(f'{base}?page=1', status_code=200, json=self.empty)
 
             zone = Zone('unit.tests.', [])
             provider.populate(zone)
 
             # Confirm the request went to the custom endpoint
             self.assertEqual(
-                f'{custom_url}/zones?page=1&per_page=50',
-                mock.last_request.url,
+                f'{custom_url}/zones?page=1&per_page=50', mock.last_request.url
             )
 
     def test_api_url_trailing_slash(self):
@@ -2488,6 +2483,7 @@ class TestCloudflareProvider(TestCase):
         self.assertEqual(
             'https://api.fed.cloudflare.com/client/v4', provider.api_url
         )
+
     def test_retry_behavior(self):
         provider = CloudflareProvider(
             'test',
