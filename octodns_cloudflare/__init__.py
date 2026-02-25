@@ -105,6 +105,7 @@ class CloudflareProvider(BaseProvider):
         records_per_page=100,
         min_ttl=120,
         timeout=TIMEOUT,
+        api_url="https://api.cloudflare.com/client/v4",
         *args,
         **kwargs,
     ):
@@ -143,6 +144,7 @@ class CloudflareProvider(BaseProvider):
         self.min_ttl = min_ttl
         self.timeout = timeout
         self._sess = sess
+        self.api_url = api_url.rstrip('/')
 
         self._zones = None
         self._zone_records = {}
@@ -196,7 +198,7 @@ class CloudflareProvider(BaseProvider):
     def _request(self, method, path, params=None, data=None):
         self.log.debug('_request: method=%s, path=%s', method, path)
 
-        url = f'https://api.cloudflare.com/client/v4{path}'
+        url = f'{self.api_url}{path}'
         resp = self._sess.request(
             method, url, params=params, json=data, timeout=self.timeout
         )
