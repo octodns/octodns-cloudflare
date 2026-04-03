@@ -1,3 +1,13 @@
+## 1.1.0 - 2026-04-03
+
+Minor:
+* Add ability to configure api_url - [#165](https://github.com/octodns/octodns-cloudflare/pull/165)
+* Add configurable timeout parameter for API requests - [#156](https://github.com/octodns/octodns-cloudflare/pull/156)
+* Add TagAllowListFilter and TagRejectListFilter processors to enable including/ignoring records based on Cloudflare tagging - [#149](https://github.com/octodns/octodns-cloudflare/pull/149)
+
+Patch:
+* Use new [changelet](https://github.com/octodns/changelet) tooling - [#148](https://github.com/octodns/octodns-cloudflare/pull/148)
+
 ## v1.0.0 - 2025-05-03 - Long overdue 1.0
 
 Noteworthy Changes:
