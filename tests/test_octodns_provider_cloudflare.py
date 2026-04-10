@@ -2652,11 +2652,11 @@ class TestCloudflareProvider(TestCase):
 
         cf_data = {
             'comment': None,
-            'content': '1 2 859be6ed04643db411f067b6c1da1d75fe08b672',
+            'content': '1 1 859be6ed04643db411f067b6c1da1d75fe08b672',
             'created_on': '2023-03-02T01:02:44.567985Z',
             'data': {
                 'algorithm': 1,
-                'type': 2,
+                'type': 1,
                 'fingerprint': '859be6ed04643db411f067b6c1da1d75fe08b672',
             },
             'id': 'ggozrtnzb11nrr9qs4ko6y3j19qkehux9',
@@ -2685,7 +2685,7 @@ class TestCloudflareProvider(TestCase):
                 'values': [
                     {
                         'algorithm': 1,
-                        'fingerprint_type': 2,
+                        'fingerprint_type': 1,
                         'fingerprint': '859be6ed04643db411f067b6c1da1d75fe08b672',
                     }
                 ],
@@ -2699,7 +2699,7 @@ class TestCloudflareProvider(TestCase):
         self.assertEqual([{'data': cf_data['data']}], contents)
 
         key = provider._gen_key(cf_data)
-        self.assertEqual('1 2 859be6ed04643db411f067b6c1da1d75fe08b672', key)
+        self.assertEqual('1 1 859be6ed04643db411f067b6c1da1d75fe08b672', key)
 
     def test_idna_domain(self):
         self.maxDiff = None
