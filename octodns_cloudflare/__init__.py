@@ -1484,6 +1484,21 @@ class CloudflareInternalProvider(CloudflareProvider):
         )
         return self._zones
 
+    def _process_desired_zone(self, desired):
+        # Internal zones have no nameservers (Cloudflare Gateway resolves
+        # them directly), so root NS records are never meaningful on this
+        # zone type. Strip unconditionally — this is an invariant of the
+        # zone type, not a provider limitation gated by strict_supports.
+        root_ns = desired.root_ns
+        if root_ns is not None:
+            self.log.warning(
+                'root NS record %s not applicable to internal zone '
+                '(internal zones have no nameservers); omitting',
+                root_ns.fqdn,
+            )
+            desired.remove_record(root_ns)
+        return super()._process_desired_zone(desired)
+
     def _ensure_zone(self, plan):
         zone_name = plan.desired.name
         if zone_name in self.zones:

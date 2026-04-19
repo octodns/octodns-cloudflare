@@ -502,6 +502,55 @@ class TestCloudflareInternalProvider(TestCase):
         # Non-internal zones returned via a view walk are dropped
         self.assertEqual({}, dict(zones))
 
+    # Root NS records on an internal zone are stripped before the
+    # BaseProvider SUPPORTS_ROOT_NS check can reject the plan.
+    def test_process_desired_zone_strips_root_ns(self):
+        provider = self._provider()
+        # strict_supports defaults to True — this confirms the strip is
+        # unconditional (not gated by strict mode).
+        self.assertTrue(provider.strict_supports)
+
+        desired = Zone('corp.internal.tests.', [])
+        desired.add_record(
+            Record.new(
+                desired,
+                '',
+                {
+                    'ttl': 3600,
+                    'type': 'NS',
+                    'values': ['ns1.example.com.', 'ns2.example.com.'],
+                },
+            )
+        )
+        desired.add_record(
+            Record.new(
+                desired,
+                'app',
+                {'ttl': 300, 'type': 'A', 'values': ['10.0.0.5']},
+            )
+        )
+
+        processed = provider._process_desired_zone(desired)
+
+        types = {r._type for r in processed.records}
+        self.assertNotIn('NS', types)
+        self.assertIn('A', types)
+
+    def test_process_desired_zone_no_root_ns_is_pass_through(self):
+        provider = self._provider()
+        desired = Zone('corp.internal.tests.', [])
+        desired.add_record(
+            Record.new(
+                desired,
+                'only',
+                {'ttl': 300, 'type': 'A', 'values': ['10.0.0.9']},
+            )
+        )
+
+        processed = provider._process_desired_zone(desired)
+
+        self.assertEqual({'A'}, {r._type for r in processed.records})
+
     # 11. pagerules disabled — SUPPORTS lacks URLFWD, zone_records
     # does not hit /pagerules
     def test_pagerules_disabled(self):
