@@ -111,6 +111,7 @@ Notes and constraints:
 
 - **Zones must pre-exist** in Cloudflare. The provider does not auto-create internal zones (create them in the dashboard or via `POST /zones` with `type: "internal"`, then link to a view).
 - **Not supported** (`cdn`, `pagerules`, `plan_type`) — passing any of these to `CloudflareInternalProvider` raises an error. Cloudflare internal zones have no proxy, no pagerules, and no plan tier.
+- **Root NS records are stripped** before apply, with a warning logged. Internal zones have no nameservers (Cloudflare Gateway resolves them directly), so root NS records are never meaningful on this zone type. You can leave `NS` records in a shared YAML source without reconfiguring `strict_supports`.
 - **Zone enumeration is hybrid by default**: the provider takes the union of `GET /zones?account.id=…` (filtered to `type=="internal"`) and a walk of the account's DNS views (`GET /accounts/{account_id}/dns_settings/views` → each view's `zones[]` → `GET /zones/{zone_id}` to hydrate names). Setting `view_id` narrows enumeration to a single view.
 - **Required token scopes**: Account: DNS Views (Edit), Account: Account Settings (Edit), Zone: Zone (Read), Zone: DNS (Edit), Zone: DNS Settings (Edit). Include the account in Account Resources and the internal zones in Zone Resources.
 - **Cross-instance collisions are user-owned**: if a zone is linked to multiple views and you register both views with octoDNS, both providers write to the same underlying zone. Split your octoDNS config so each zone is managed by exactly one provider.
