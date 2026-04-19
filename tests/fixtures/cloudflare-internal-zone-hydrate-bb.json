@@ -1,0 +1,13 @@
+{
+  "result": {
+    "id": "bb000000000000000000000000000001",
+    "name": "corp.internal.tests",
+    "status": "active",
+    "type": "internal",
+    "name_servers": [],
+    "plan": null
+  },
+  "success": true,
+  "errors": [],
+  "messages": []
+}

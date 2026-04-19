@@ -1,0 +1,57 @@
+{
+  "result": [
+    {
+      "id": "rec00000000000000000000000000001",
+      "type": "A",
+      "name": "corp.internal.tests",
+      "content": "10.0.0.1",
+      "proxiable": false,
+      "proxied": false,
+      "ttl": 300,
+      "locked": false,
+      "zone_id": "bb000000000000000000000000000001",
+      "zone_name": "corp.internal.tests",
+      "modified_on": "2026-04-01T00:00:00Z",
+      "created_on": "2026-04-01T00:00:00Z"
+    },
+    {
+      "id": "rec00000000000000000000000000002",
+      "type": "CNAME",
+      "name": "www.corp.internal.tests",
+      "content": "corp.internal.tests",
+      "proxiable": false,
+      "proxied": false,
+      "ttl": 300,
+      "locked": false,
+      "zone_id": "bb000000000000000000000000000001",
+      "zone_name": "corp.internal.tests",
+      "modified_on": "2026-04-01T00:00:00Z",
+      "created_on": "2026-04-01T00:00:00Z"
+    },
+    {
+      "id": "rec00000000000000000000000000003",
+      "type": "MX",
+      "name": "corp.internal.tests",
+      "content": "mail.corp.internal.tests",
+      "priority": 10,
+      "proxiable": false,
+      "proxied": false,
+      "ttl": 300,
+      "locked": false,
+      "zone_id": "bb000000000000000000000000000001",
+      "zone_name": "corp.internal.tests",
+      "modified_on": "2026-04-01T00:00:00Z",
+      "created_on": "2026-04-01T00:00:00Z"
+    }
+  ],
+  "result_info": {
+    "page": 1,
+    "per_page": 100,
+    "total_pages": 1,
+    "count": 3,
+    "total_count": 3
+  },
+  "success": true,
+  "errors": [],
+  "messages": []
+}
