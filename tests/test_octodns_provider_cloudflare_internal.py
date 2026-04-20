@@ -36,7 +36,6 @@ class TestCloudflareInternalProvider(TestCase):
             retry_period=0,
         )
 
-    # 1. init validation
     def test_init_requires_account_id(self):
         with self.assertRaises(ProviderException) as ctx:
             CloudflareInternalProvider('test', token='token')
@@ -60,7 +59,6 @@ class TestCloudflareInternalProvider(TestCase):
         self.assertIsNone(provider.plan_type)
         self.assertFalse(provider.cdn)
 
-    # 3. hybrid enumeration union
     def test_zones_hybrid_union(self):
         provider = self._provider()
         with requests_mock() as mock:
@@ -89,7 +87,6 @@ class TestCloudflareInternalProvider(TestCase):
         self.assertIsNone(zones['corp.internal.tests.']['cloudflare_plan'])
         self.assertEqual([], zones['corp.internal.tests.']['name_servers'])
 
-    # 4. view_id narrowing
     def test_zones_view_id_narrows_enumeration(self):
         provider = self._provider(view_id=VIEW_ID)
         with requests_mock() as mock:
@@ -129,7 +126,6 @@ class TestCloudflareInternalProvider(TestCase):
             set(zones.keys()),
         )
 
-    # 5. duplicate-name raises
     def test_zones_duplicate_name_raises(self):
         provider = self._provider()
         empty_views = {
@@ -166,7 +162,6 @@ class TestCloudflareInternalProvider(TestCase):
         self.assertIn('dupb0000000000000000000000000002', msg)
         self.assertIn('view_id', msg)
 
-    # 6. duplicate-name disambiguated by view_id
     def test_zones_duplicate_name_disambiguated_by_view_id(self):
         provider = self._provider(view_id=VIEW_ID)
         # view contains exactly one of the two duplicate-named zones
@@ -215,7 +210,6 @@ class TestCloudflareInternalProvider(TestCase):
             zones['shared.internal.tests.']['id'],
         )
 
-    # 7. populate reads internal records via inherited /dns_records path
     def test_populate_reads_internal_records(self):
         provider = self._provider(view_id=VIEW_ID)
 
@@ -319,7 +313,6 @@ class TestCloudflareInternalProvider(TestCase):
             f'{getattr(plan, "changes", None)}',
         )
 
-    # 8. apply refuses to create missing zone
     def test_apply_refuses_to_create_missing_zone(self):
         provider = self._provider()
         provider._zones = {}  # prevent lazy fetch
@@ -355,7 +348,6 @@ class TestCloudflareInternalProvider(TestCase):
         self.assertIn(ACCOUNT_ID, msg)
         self.assertIn('does not auto-create', msg)
 
-    # 9. apply creates records in an existing internal zone
     def test_apply_creates_records_in_existing_zone(self):
         provider = self._provider()
         provider._zones = {
@@ -406,7 +398,6 @@ class TestCloudflareInternalProvider(TestCase):
             self.assertEqual(1, len(record_posts))
             self.assertEqual('10.0.0.99', record_posts[0].json()['content'])
 
-    # 10. apply does not issue plan-type calls
     def test_apply_skips_plan_type_handling(self):
         provider = self._provider()
         provider._zones = {
@@ -624,8 +615,6 @@ class TestCloudflareInternalProvider(TestCase):
 
         self.assertEqual({'A'}, {r._type for r in processed.records})
 
-    # 11. pagerules disabled — SUPPORTS lacks URLFWD, zone_records
-    # does not hit /pagerules
     def test_pagerules_disabled(self):
         provider = self._provider()
         self.assertNotIn('URLFWD', provider.SUPPORTS)

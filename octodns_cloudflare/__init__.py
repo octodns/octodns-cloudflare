@@ -1399,11 +1399,17 @@ class CloudflareInternalProvider(CloudflareProvider):
     account share a name across views.
     '''
 
-    # Fresh copy isolates this subclass from runtime mutations to the
-    # parent's SUPPORTS set (tests have been observed to mutate it).
-    SUPPORTS = set(CloudflareProvider.SUPPORTS) - {'URLFWD'}
+    # Fresh copy so runtime mutation of CloudflareProvider.SUPPORTS (which
+    # the parent test suite does via `provider.SUPPORTS.add(...)`) can't
+    # leak URLFWD into this subclass.
+    SUPPORTS = set(CloudflareProvider.SUPPORTS)
 
     _FORBIDDEN_PARAMS = ('cdn', 'pagerules', 'plan_type')
+
+    def _err(self, msg):
+        return ProviderException(
+            f'CloudflareInternalProvider[{self.id}]: {msg}'
+        )
 
     def __init__(self, id, *args, account_id=None, view_id=None, **kwargs):
         if account_id is None:
@@ -1465,11 +1471,10 @@ class CloudflareInternalProvider(CloudflareProvider):
                 f'{n!r} (zone_ids={ids})'
                 for n, ids in sorted(duplicates.items())
             )
-            raise ProviderException(
-                f'CloudflareInternalProvider[{self.id}]: multiple '
-                f'internal zones with the same name found: {details}. '
-                'Set `view_id` on the provider to narrow enumeration '
-                'to a single view.'
+            raise self._err(
+                f'multiple internal zones with the same name found: '
+                f'{details}. Set `view_id` on the provider to narrow '
+                'enumeration to a single view.'
             )
 
         self._zones = IdnaDict(
@@ -1503,13 +1508,9 @@ class CloudflareInternalProvider(CloudflareProvider):
         zone_name = plan.desired.name
         if zone_name in self.zones:
             return
-        raise ProviderException(
-            f'CloudflareInternalProvider[{self.id}]: internal zone '
-            f'{zone_name!r} not found in account {self.account_id!r} '
-            f'(view_id={self.view_id!r}). Create the zone in Cloudflare '
-            'first; CloudflareInternalProvider does not auto-create '
-            'internal zones.'
+        raise self._err(
+            f'internal zone {zone_name!r} not found in account '
+            f'{self.account_id!r} (view_id={self.view_id!r}). Create the '
+            'zone in Cloudflare first; CloudflareInternalProvider does '
+            'not auto-create internal zones.'
         )
-
-    def _apply_plan_type(self, plan):
-        return
