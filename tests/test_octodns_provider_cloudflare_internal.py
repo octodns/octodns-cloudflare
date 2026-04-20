@@ -246,6 +246,79 @@ class TestCloudflareInternalProvider(TestCase):
         records_by_type = {r._type for r in zone.records}
         self.assertEqual({'A', 'CNAME', 'MX'}, records_by_type)
 
+    # Idempotency: populate existing records, plan against a source that
+    # declares the same records, expect zero changes. Proves that a rerun
+    # after a successful apply is a no-op — it does not re-Create records
+    # that already exist in Cloudflare.
+    def test_plan_is_idempotent_against_identical_source(self):
+        provider = self._provider(view_id=VIEW_ID)
+
+        with requests_mock() as mock:
+            mock.get(
+                f'https://api.cloudflare.com/client/v4/accounts/'
+                f'{ACCOUNT_ID}/dns_settings/views/{VIEW_ID}',
+                text=fixture('cloudflare-views-single.json'),
+            )
+            mock.get(
+                f'https://api.cloudflare.com/client/v4/zones/{ZONE_ID}',
+                text=fixture('cloudflare-internal-zone-hydrate-bb.json'),
+            )
+            mock.get(
+                f'https://api.cloudflare.com/client/v4/zones/{ORPHAN_ID}',
+                text=fixture('cloudflare-internal-zone-hydrate-cc.json'),
+            )
+            mock.get(
+                f'https://api.cloudflare.com/client/v4/zones/{ZONE_ID}'
+                '/dns_records?page=1&per_page=100',
+                text=fixture('cloudflare-internal-dns_records.json'),
+            )
+
+            # Build a desired zone matching what Cloudflare returns
+            desired = Zone('corp.internal.tests.', [])
+            desired.add_record(
+                Record.new(
+                    desired,
+                    '',
+                    {'ttl': 300, 'type': 'A', 'values': ['10.0.0.1']},
+                )
+            )
+            desired.add_record(
+                Record.new(
+                    desired,
+                    'www',
+                    {
+                        'ttl': 300,
+                        'type': 'CNAME',
+                        'value': 'corp.internal.tests.',
+                    },
+                )
+            )
+            desired.add_record(
+                Record.new(
+                    desired,
+                    '',
+                    {
+                        'ttl': 300,
+                        'type': 'MX',
+                        'values': [
+                            {
+                                'preference': 10,
+                                'exchange': 'mail.corp.internal.tests.',
+                            }
+                        ],
+                    },
+                )
+            )
+
+            plan = provider.plan(desired)
+
+        # plan() returns None when there are no changes
+        self.assertIsNone(
+            plan,
+            f'expected idempotent no-op, got changes: '
+            f'{getattr(plan, "changes", None)}',
+        )
+
     # 8. apply refuses to create missing zone
     def test_apply_refuses_to_create_missing_zone(self):
         provider = self._provider()
