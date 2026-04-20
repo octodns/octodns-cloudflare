@@ -1,0 +1,30 @@
+{
+  "result": [
+    {
+      "id": "dupa0000000000000000000000000001",
+      "name": "shared.internal.tests",
+      "status": "active",
+      "type": "internal",
+      "name_servers": [],
+      "plan": null
+    },
+    {
+      "id": "dupb0000000000000000000000000002",
+      "name": "shared.internal.tests",
+      "status": "active",
+      "type": "internal",
+      "name_servers": [],
+      "plan": null
+    }
+  ],
+  "result_info": {
+    "page": 1,
+    "per_page": 50,
+    "total_pages": 1,
+    "count": 2,
+    "total_count": 2
+  },
+  "success": true,
+  "errors": [],
+  "messages": []
+}

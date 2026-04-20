@@ -224,22 +224,29 @@ class CloudflareProvider(BaseProvider):
             _type = 'ZDS'
         return (change.CLASS_ORDERING, change.record.name, _type)
 
+    def _paginated_get(self, path, params=None, per_page=None):
+        page = 1
+        params = dict(params or {})
+        if per_page is None:
+            per_page = self.zones_per_page
+        while page:
+            params['page'] = page
+            params['per_page'] = per_page
+            resp = self._try_request('GET', path, params=params)
+            yield from resp['result']
+            info = resp['result_info']
+            if info['count'] > 0 and info['count'] == info['per_page']:
+                page += 1
+            else:
+                page = None
+
     @property
     def zones(self):
         if self._zones is None:
-            page = 1
-            zones = []
-            while page:
-                params = {'page': page, 'per_page': self.zones_per_page}
-                if self.account_id is not None:
-                    params['account.id'] = self.account_id
-                resp = self._try_request('GET', '/zones', params=params)
-                zones += resp['result']
-                info = resp['result_info']
-                if info['count'] > 0 and info['count'] == info['per_page']:
-                    page += 1
-                else:
-                    page = None
+            params = {}
+            if self.account_id is not None:
+                params['account.id'] = self.account_id
+            zones = list(self._paginated_get('/zones', params=params))
 
             self._zones = IdnaDict(
                 {
@@ -510,26 +517,15 @@ class CloudflareProvider(BaseProvider):
             if not zone_id:
                 return []
 
-            records = []
-            path = f'/zones/{zone_id}/dns_records'
-            page = 1
-            while page:
-                resp = self._try_request(
-                    'GET',
-                    path,
-                    params={'page': page, 'per_page': self.records_per_page},
+            # populate DNS records, ensure only supported types are considered
+            records = [
+                r
+                for r in self._paginated_get(
+                    f'/zones/{zone_id}/dns_records',
+                    per_page=self.records_per_page,
                 )
-                # populate DNS records, ensure only supported types are considered
-                records += [
-                    record
-                    for record in resp['result']
-                    if record['type'] in self.SUPPORTS
-                ]
-                info = resp['result_info']
-                if info['count'] > 0 and info['count'] == info['per_page']:
-                    page += 1
-                else:
-                    page = None
+                if r['type'] in self.SUPPORTS
+            ]
             if self.pagerules:
                 path = f'/zones/{zone_id}/pagerules'
                 resp = self._try_request(
@@ -1287,6 +1283,40 @@ class CloudflareProvider(BaseProvider):
             }
         }
 
+    def _ensure_zone(self, plan):
+        zone_name = plan.desired.name
+        if zone_name in self.zones:
+            return
+        self.log.debug('_apply:   no matching zone, creating')
+        data = {'name': zone_name[:-1], 'jump_start': False}
+        if self.account_id is not None:
+            data['account'] = {'id': self.account_id}
+        resp = self._try_request('POST', '/zones', data=data)
+        zone = resp['result']
+        self.zones[zone_name] = {
+            'id': zone['id'],
+            'cloudflare_plan': zone.get('plan', {}).get('legacy_id', None),
+            'name_servers': zone.get('name_servers', []),
+        }
+        self._zone_records[zone_name] = {}
+
+    def _apply_plan_type(self, plan):
+        if self.plan_type is None:
+            return
+        if not hasattr(plan, 'meta'):
+            # Older versions of octodns don't have meta support.
+            self.log.warning(
+                'plan_type is set but meta is not supported by octodns %s, plan changes will not be applied',
+                octodns_version,
+            )
+            return
+        meta = plan.meta
+        if not meta:
+            return
+        desired_plan = meta.get('cloudflare_plan', {}).get('desired', None)
+        if desired_plan:
+            self._update_plan(plan.desired.name, desired_plan)
+
     def _apply(self, plan):
         desired = plan.desired
         changes = plan.changes
@@ -1296,36 +1326,8 @@ class CloudflareProvider(BaseProvider):
             '_apply: zone=%s, len(changes)=%d', zone_name, len(changes)
         )
 
-        if zone_name not in self.zones:
-            self.log.debug('_apply:   no matching zone, creating')
-            data = {'name': zone_name[:-1], 'jump_start': False}
-            if self.account_id is not None:
-                data['account'] = {'id': self.account_id}
-            resp = self._try_request('POST', '/zones', data=data)
-            zone = resp['result']
-            self.zones[zone_name] = {
-                'id': zone['id'],
-                'cloudflare_plan': zone.get('plan', {}).get('legacy_id', None),
-                'name_servers': zone.get('name_servers', []),
-            }
-            self._zone_records[zone_name] = {}
-
-        # Handle plan changes if needed
-        if self.plan_type is not None:
-            if hasattr(plan, 'meta'):
-                meta = plan.meta
-                if meta:
-                    desired_plan = meta.get('cloudflare_plan', {}).get(
-                        'desired', None
-                    )
-                    if desired_plan:
-                        self._update_plan(zone_name, desired_plan)
-            else:
-                # Older versions of octodns don't have meta support.
-                self.log.warning(
-                    'plan_type is set but meta is not supported by octodns %s, plan changes will not be applied',
-                    octodns_version,
-                )
+        self._ensure_zone(plan)
+        self._apply_plan_type(plan)
 
         self.log.info(
             'zone %s (id %s) name servers: %s',
@@ -1379,3 +1381,136 @@ class CloudflareProvider(BaseProvider):
                 extra_changes.append(Update(existing_record, desired_record))
 
         return extra_changes
+
+
+class CloudflareInternalProvider(CloudflareProvider):
+    '''
+    Provider for Cloudflare Internal DNS zones (type=internal).
+
+    Internal zones are account-scoped, grouped into DNS views, and queried
+    via Cloudflare Gateway. This provider manages records inside
+    pre-existing internal zones; cdn, pagerules, and plan_type do not
+    apply and are rejected at init.
+
+    Zone enumeration unions `GET /zones?account.id=...` (filtered to
+    type==internal) with a walk of the account's DNS views, so zones
+    reachable via either path are picked up. Setting view_id narrows
+    enumeration to a single view, needed when two internal zones in the
+    account share a name across views.
+    '''
+
+    # Fresh copy so runtime mutation of CloudflareProvider.SUPPORTS (which
+    # the parent test suite does via `provider.SUPPORTS.add(...)`) can't
+    # leak URLFWD into this subclass.
+    SUPPORTS = set(CloudflareProvider.SUPPORTS)
+
+    _FORBIDDEN_PARAMS = ('cdn', 'pagerules', 'plan_type')
+
+    def _err(self, msg):
+        return ProviderException(
+            f'CloudflareInternalProvider[{self.id}]: {msg}'
+        )
+
+    def __init__(self, id, *args, account_id=None, view_id=None, **kwargs):
+        if account_id is None:
+            raise ProviderException(
+                f'CloudflareInternalProvider[{id}]: account_id is required '
+                'for internal DNS zones (views are account-scoped)'
+            )
+        for forbidden in self._FORBIDDEN_PARAMS:
+            if forbidden in kwargs:
+                raise ProviderException(
+                    f'CloudflareInternalProvider[{id}]: {forbidden!r} is '
+                    'not supported — Cloudflare internal zones do not have '
+                    'proxy, pagerules, or a plan'
+                )
+        kwargs.update(cdn=False, pagerules=False, plan_type=None)
+        super().__init__(id, *args, account_id=account_id, **kwargs)
+        self.view_id = view_id
+
+    def _internal_zone_ids_from_views(self):
+        base = f'/accounts/{self.account_id}/dns_settings/views'
+        if self.view_id is not None:
+            resp = self._try_request('GET', f'{base}/{self.view_id}')
+            return set(resp['result'].get('zones') or [])
+        zone_ids = set()
+        for view in self._paginated_get(base):
+            zone_ids.update(view.get('zones') or [])
+        return zone_ids
+
+    @property
+    def zones(self):
+        if self._zones is not None:
+            return self._zones
+
+        zones_by_id = {}
+        # view_id narrows enumeration: listing /zones would re-widen to
+        # every internal zone in the account, defeating the narrowing.
+        if self.view_id is None:
+            for z in self._paginated_get(
+                '/zones', params={'account.id': self.account_id}
+            ):
+                if z.get('type') == 'internal':
+                    zones_by_id[z['id']] = z
+
+        for zone_id in self._internal_zone_ids_from_views():
+            if zone_id in zones_by_id:
+                continue
+            z = self._try_request('GET', f'/zones/{zone_id}')['result']
+            if z.get('type') == 'internal':
+                zones_by_id[z['id']] = z
+
+        name_to_ids = defaultdict(list)
+        for zone_id, z in zones_by_id.items():
+            name_to_ids[z['name']].append(zone_id)
+        duplicates = {
+            n: sorted(ids) for n, ids in name_to_ids.items() if len(ids) > 1
+        }
+        if duplicates:
+            details = '; '.join(
+                f'{n!r} (zone_ids={ids})'
+                for n, ids in sorted(duplicates.items())
+            )
+            raise self._err(
+                f'multiple internal zones with the same name found: '
+                f'{details}. Set `view_id` on the provider to narrow '
+                'enumeration to a single view.'
+            )
+
+        self._zones = IdnaDict(
+            {
+                f'{z["name"]}.': {
+                    'id': z['id'],
+                    'cloudflare_plan': None,
+                    'name_servers': z.get('name_servers') or [],
+                }
+                for z in zones_by_id.values()
+            }
+        )
+        return self._zones
+
+    def _process_desired_zone(self, desired):
+        # Internal zones have no nameservers (Cloudflare Gateway resolves
+        # them directly), so root NS records are never meaningful on this
+        # zone type. Strip unconditionally — this is an invariant of the
+        # zone type, not a provider limitation gated by strict_supports.
+        root_ns = desired.root_ns
+        if root_ns is not None:
+            self.log.warning(
+                'root NS record %s not applicable to internal zone '
+                '(internal zones have no nameservers); omitting',
+                root_ns.fqdn,
+            )
+            desired.remove_record(root_ns)
+        return super()._process_desired_zone(desired)
+
+    def _ensure_zone(self, plan):
+        zone_name = plan.desired.name
+        if zone_name in self.zones:
+            return
+        raise self._err(
+            f'internal zone {zone_name!r} not found in account '
+            f'{self.account_id!r} (view_id={self.view_id!r}). Create the '
+            'zone in Cloudflare first; CloudflareInternalProvider does '
+            'not auto-create internal zones.'
+        )
