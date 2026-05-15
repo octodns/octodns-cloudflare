@@ -225,6 +225,12 @@ class CloudflareProvider(BaseProvider):
         return (change.CLASS_ORDERING, change.record.name, _type)
 
     def _paginated_get(self, path, params=None, per_page=None):
+        '''
+        Yield results from a paginated Cloudflare GET endpoint. ``page``
+        and ``per_page`` in ``params`` are overwritten on each request;
+        ``per_page`` is taken from the argument (default
+        ``self.zones_per_page``).
+        '''
         page = 1
         params = dict(params or {})
         if per_page is None:
@@ -1383,6 +1389,10 @@ class CloudflareProvider(BaseProvider):
         return extra_changes
 
 
+class CloudflareInternalProviderException(ProviderException):
+    pass
+
+
 class CloudflareInternalProvider(CloudflareProvider):
     '''
     Provider for Cloudflare Internal DNS zones (type=internal).
@@ -1406,33 +1416,37 @@ class CloudflareInternalProvider(CloudflareProvider):
 
     _FORBIDDEN_PARAMS = ('cdn', 'pagerules', 'plan_type')
 
-    def _err(self, msg):
-        return ProviderException(
-            f'CloudflareInternalProvider[{self.id}]: {msg}'
-        )
-
     def __init__(self, id, *args, account_id=None, view_id=None, **kwargs):
         if account_id is None:
-            raise ProviderException(
-                f'CloudflareInternalProvider[{id}]: account_id is required '
-                'for internal DNS zones (views are account-scoped)'
+            raise CloudflareInternalProviderException(
+                f'{id}: account_id is required for internal DNS zones '
+                '(views are account-scoped)'
             )
         for forbidden in self._FORBIDDEN_PARAMS:
             if forbidden in kwargs:
-                raise ProviderException(
-                    f'CloudflareInternalProvider[{id}]: {forbidden!r} is '
-                    'not supported — Cloudflare internal zones do not have '
-                    'proxy, pagerules, or a plan'
+                raise CloudflareInternalProviderException(
+                    f'{id}: {forbidden!r} is not supported — Cloudflare '
+                    'internal zones do not have proxy, pagerules, or a plan'
                 )
-        kwargs.update(cdn=False, pagerules=False, plan_type=None)
-        super().__init__(id, *args, account_id=account_id, **kwargs)
+        # Parent defaults pagerules=True, which would re-add URLFWD to SUPPORTS.
+        super().__init__(
+            id,
+            *args,
+            account_id=account_id,
+            cdn=False,
+            pagerules=False,
+            plan_type=None,
+            **kwargs,
+        )
         self.view_id = view_id
 
     def _internal_zone_ids_from_views(self):
         base = f'/accounts/{self.account_id}/dns_settings/views'
         if self.view_id is not None:
+            # Narrow to the single configured view; listing all views would re-widen.
             resp = self._try_request('GET', f'{base}/{self.view_id}')
             return set(resp['result'].get('zones') or [])
+        # Union zones across all views; a zone may appear in multiple views.
         zone_ids = set()
         for view in self._paginated_get(base):
             zone_ids.update(view.get('zones') or [])
@@ -1471,10 +1485,10 @@ class CloudflareInternalProvider(CloudflareProvider):
                 f'{n!r} (zone_ids={ids})'
                 for n, ids in sorted(duplicates.items())
             )
-            raise self._err(
-                f'multiple internal zones with the same name found: '
-                f'{details}. Set `view_id` on the provider to narrow '
-                'enumeration to a single view.'
+            raise CloudflareInternalProviderException(
+                f'{self.id}: multiple internal zones with the same name '
+                f'found: {details}. Set `view_id` on the provider to '
+                'narrow enumeration to a single view.'
             )
 
         self._zones = IdnaDict(
@@ -1508,8 +1522,8 @@ class CloudflareInternalProvider(CloudflareProvider):
         zone_name = plan.desired.name
         if zone_name in self.zones:
             return
-        raise self._err(
-            f'internal zone {zone_name!r} not found in account '
+        raise CloudflareInternalProviderException(
+            f'{self.id}: internal zone {zone_name!r} not found in account '
             f'{self.account_id!r} (view_id={self.view_id!r}). Create the '
             'zone in Cloudflare first; CloudflareInternalProvider does '
             'not auto-create internal zones.'
