@@ -1,0 +1,36 @@
+{
+  "result": [
+    {
+      "id": "aa00000000000000000000000000full",
+      "name": "public.example.com",
+      "status": "active",
+      "type": "full",
+      "name_servers": [
+        "alice.ns.cloudflare.com",
+        "tom.ns.cloudflare.com"
+      ],
+      "plan": {
+        "id": "0feeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "legacy_id": "free"
+      }
+    },
+    {
+      "id": "bb000000000000000000000000000001",
+      "name": "corp.internal.tests",
+      "status": "active",
+      "type": "internal",
+      "name_servers": [],
+      "plan": null
+    }
+  ],
+  "result_info": {
+    "page": 1,
+    "per_page": 50,
+    "total_pages": 1,
+    "count": 2,
+    "total_count": 2
+  },
+  "success": true,
+  "errors": [],
+  "messages": []
+}

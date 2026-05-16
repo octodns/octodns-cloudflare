@@ -1,0 +1,13 @@
+{
+  "result": {
+    "id": "cc000000000000000000000000000002",
+    "name": "orphan.internal.tests",
+    "status": "active",
+    "type": "internal",
+    "name_servers": [],
+    "plan": null
+  },
+  "success": true,
+  "errors": [],
+  "messages": []
+}
