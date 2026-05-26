@@ -132,7 +132,7 @@ class TestProxyCNAME(TestCase):
         self.assertEqual(zone_expected_cf.records, processed_cf_desired.records)
 
         # Process / check other provider destined records
-        yaml_provider = YamlProvider('test', 'test')
+        yaml_provider = YamlProvider('test', 'test', escaped_semicolons=False)
         processed_other_desired, processed_other_existing = (
             processor.process_source_and_target_zones(
                 zone, zone_empty, yaml_provider
