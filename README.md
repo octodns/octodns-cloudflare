@@ -159,6 +159,26 @@ name:
     value: 1.2.3.4
 ```
 
+Note: `A`, `AAAA`, `CNAME` and `ALIAS` records support a Cloudflare [Regional Services](https://developers.cloudflare.com/data-localization/regional-services/) (Data Localization) `region`. The value is the Cloudflare `region_key` (e.g. `eu`, `isoeu`, `us`, `ca`, …).
+
+```yaml
+www:
+    octodns:
+        cloudflare:
+            proxied: true
+            region: eu
+    ttl: 120
+    type: A
+    value: 1.2.3.4
+```
+
+Constraints, because Cloudflare manages regions per-hostname on a separate API (`/zones/{id}/addressing/regional_hostnames`) rather than on the DNS record itself:
+
+- A region applies to the **whole hostname**, so every proxiable record sharing a name (e.g. an `A` and `AAAA` on `www`) must declare the **same** `region`; conflicting values are reported via `strict_supports`.
+- Regions only take effect on **proxied** records. A `region` on a non-proxied record is applied but inert until the record is proxied; it is reported via `strict_supports`.
+- Regional Services is a Cloudflare **Enterprise** add-on and must be enabled on the account before any region can be set.
+- The existing `DNS:Read`/`DNS:Edit` token permissions already cover the regional hostnames API — no additional scope is required.
+
 ### Support Information
 
 #### Records

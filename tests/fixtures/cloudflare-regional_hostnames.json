@@ -1,0 +1,19 @@
+{
+  "result": [
+    {
+      "hostname": "www.unit.tests",
+      "region_key": "eu",
+      "created_on": "2024-01-01T00:00:00.000000Z",
+      "routing": "dns"
+    }
+  ],
+  "success": true,
+  "errors": [],
+  "messages": [],
+  "result_info": {
+    "page": 1,
+    "per_page": 50,
+    "count": 1,
+    "total_count": 1
+  }
+}

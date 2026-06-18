@@ -271,9 +271,28 @@ class TestCloudflareProvider(TestCase):
             ) as fh:
                 mock.get(f'{base}?page=3', status_code=200, text=fh.read())
 
+            # regional hostnames (Cloudflare Regional Services); base above is
+            # `.../dns_records`, this endpoint hangs off the zone root
+            with open(
+                'tests/fixtures/cloudflare-regional_hostnames.json'
+            ) as fh:
+                mock.get(
+                    'https://api.cloudflare.com/client/v4/zones/'
+                    '234234243423aaabb334342aaa343435/addressing/'
+                    'regional_hostnames',
+                    status_code=200,
+                    text=fh.read(),
+                )
+
             zone = Zone('unit.tests.', [])
             provider.populate(zone)
             self.assertEqual(24, len(zone.records))
+
+            # the www A record picked up its region from regional services
+            www = next(
+                r for r in zone.records if r.name == 'www' and r._type == 'A'
+            )
+            self.assertEqual('eu', www.octodns['cloudflare']['region'])
 
             changes = self.expected.changes(zone, provider)
 
@@ -2021,6 +2040,376 @@ class TestCloudflareProvider(TestCase):
 
         self.assertTrue(record.octodns['cloudflare']['auto-ttl'])
         self.assertFalse(record.octodns['cloudflare'].get('proxied', False))
+
+    def test_regional_hostname_recordfor_sets_region(self):
+        # _record_for reads the per-zone mapping captured by zone_records and
+        # annotates the matching record with its region_key
+        provider = CloudflareProvider('test', 'email', 'token')
+        zone = Zone('unit.tests.', [])
+        zone_records = [
+            {
+                "id": "fc12ab34cd5611334422ab3322997654",
+                "type": "A",
+                "name": "www.unit.tests",
+                "content": "1.2.3.4",
+                "proxiable": True,
+                "proxied": True,
+                "ttl": 1,
+                "zone_id": "ff12ab34cd5611334422ab3322997650",
+                "zone_name": "unit.tests",
+                "meta": {"auto_added": False},
+            }
+        ]
+        provider._zone_regional_hostnames = {
+            'unit.tests.': {'www.unit.tests': 'eu'}
+        }
+        record = provider._record_for(zone, 'www', 'A', zone_records, False)
+        self.assertEqual('eu', record.octodns['cloudflare']['region'])
+
+    def test_regional_hostname_recordfor_no_mapping(self):
+        # when zone_records is stubbed (no mapping captured) no region is set
+        # and no extra request is made
+        provider = CloudflareProvider('test', 'email', 'token')
+        zone = Zone('unit.tests.', [])
+        zone_records = [
+            {
+                "id": "fc12ab34cd5611334422ab3322997654",
+                "type": "A",
+                "name": "www.unit.tests",
+                "content": "1.2.3.4",
+                "proxiable": True,
+                "proxied": False,
+                "ttl": 300,
+                "zone_id": "ff12ab34cd5611334422ab3322997650",
+                "zone_name": "unit.tests",
+                "meta": {"auto_added": False},
+            }
+        ]
+        record = provider._record_for(zone, 'www', 'A', zone_records, False)
+        self.assertNotIn('region', record.octodns.get('cloudflare', {}))
+
+    def test_regional_hostnames_fetch(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        provider._try_request = Mock()
+
+        # no proxiable records -> no request, empty mapping (regions only
+        # apply to proxied hostnames)
+        self.assertEqual(
+            {}, provider._regional_hostnames('42', [{'type': 'TXT'}])
+        )
+        provider._try_request.assert_not_called()
+
+        # a proxiable record present -> single GET, mapping keyed by hostname
+        provider._try_request.return_value = {
+            'result': [
+                {"hostname": "www.unit.tests", "region_key": "eu"},
+                {"hostname": "api.unit.tests", "region_key": "us"},
+            ]
+        }
+        self.assertEqual(
+            {'www.unit.tests': 'eu', 'api.unit.tests': 'us'},
+            provider._regional_hostnames('42', [{'type': 'A'}]),
+        )
+        provider._try_request.assert_called_once_with(
+            'GET', '/zones/42/addressing/regional_hostnames'
+        )
+
+        # a zone with no regional hostnames returns result=null -> empty
+        # mapping (observed against live zones)
+        provider._try_request.return_value = {'result': None}
+        self.assertEqual(
+            {}, provider._regional_hostnames('42', [{'type': 'A'}])
+        )
+
+    def _region_record(self, zone, name='www', region='eu', proxied=True):
+        record = Record.new(
+            zone, name, {'ttl': 300, 'type': 'A', 'value': '1.2.3.4'}
+        )
+        cloudflare = {}
+        if proxied:
+            cloudflare['proxied'] = True
+        if region is not None:
+            cloudflare['region'] = region
+        if cloudflare:
+            record.octodns['cloudflare'] = cloudflare
+        return record
+
+    def test_apply_region(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        provider._zones = {'unit.tests.': {'id': '42', 'name_servers': []}}
+        provider._try_request = Mock(return_value={})
+        zone = Zone('unit.tests.', [])
+
+        # non-proxiable type -> no-op, no request issued
+        txt = Record.new(zone, 'txt', {'ttl': 300, 'type': 'TXT', 'value': 'v'})
+        txt.octodns['cloudflare'] = {'region': 'eu'}
+        provider._apply_region(txt, 'eu')
+        provider._try_request.assert_not_called()
+
+        # desired == current -> no-op
+        provider._zone_regional_hostnames = {
+            'unit.tests.': {'www.unit.tests': 'eu'}
+        }
+        provider._apply_region(self._region_record(zone), 'eu')
+        provider._try_request.assert_not_called()
+        # a no-op must leave the cached mapping untouched
+        self.assertEqual(
+            {'www.unit.tests': 'eu'},
+            provider._zone_regional_hostnames['unit.tests.'],
+        )
+
+        # current absent, desired set -> POST (create)
+        provider._zone_regional_hostnames = {'unit.tests.': {}}
+        provider._apply_region(self._region_record(zone), 'eu')
+        provider._try_request.assert_called_once_with(
+            'POST',
+            '/zones/42/addressing/regional_hostnames',
+            data={'hostname': 'www.unit.tests', 'region_key': 'eu'},
+        )
+        self.assertEqual(
+            'eu',
+            provider._zone_regional_hostnames['unit.tests.']['www.unit.tests'],
+        )
+
+        # current set, desired different -> PATCH (change region_key)
+        provider._try_request.reset_mock()
+        provider._zone_regional_hostnames = {
+            'unit.tests.': {'www.unit.tests': 'eu'}
+        }
+        provider._apply_region(self._region_record(zone), 'us')
+        provider._try_request.assert_called_once_with(
+            'PATCH',
+            '/zones/42/addressing/regional_hostnames/www.unit.tests',
+            data={'region_key': 'us'},
+        )
+        self.assertEqual(
+            'us',
+            provider._zone_regional_hostnames['unit.tests.']['www.unit.tests'],
+        )
+
+        # current set, desired None -> DELETE (remove)
+        provider._try_request.reset_mock()
+        provider._zone_regional_hostnames = {
+            'unit.tests.': {'www.unit.tests': 'eu'}
+        }
+        provider._apply_region(self._region_record(zone, region=None), None)
+        provider._try_request.assert_called_once_with(
+            'DELETE', '/zones/42/addressing/regional_hostnames/www.unit.tests'
+        )
+        self.assertNotIn(
+            'www.unit.tests', provider._zone_regional_hostnames['unit.tests.']
+        )
+
+    def test_apply_create_with_region(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        provider._zones = {'unit.tests.': {'id': '42', 'name_servers': []}}
+        provider._try_request = Mock(return_value={})
+        zone = Zone('unit.tests.', [])
+        record = self._region_record(zone, region='eu')
+
+        provider._apply_Create(Create(record))
+
+        # the dns record is created, then the regional hostname is added
+        provider._try_request.assert_any_call(
+            'POST',
+            '/zones/42/addressing/regional_hostnames',
+            data={'hostname': 'www.unit.tests', 'region_key': 'eu'},
+        )
+
+    def test_apply_delete_removes_region(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        provider._zones = {'unit.tests.': {'id': '42', 'name_servers': []}}
+        provider.zone_records = Mock(
+            return_value=[
+                {
+                    "id": "rec1",
+                    "type": "A",
+                    "name": "www.unit.tests",
+                    "content": "1.2.3.4",
+                    "ttl": 1,
+                    "proxied": True,
+                    "zone_id": "42",
+                }
+            ]
+        )
+        provider._zone_regional_hostnames = {
+            'unit.tests.': {'www.unit.tests': 'eu'}
+        }
+        provider._try_request = Mock(return_value={})
+        zone = Zone('unit.tests.', [])
+        record = self._region_record(zone, region=None)
+
+        provider._apply_Delete(Delete(record))
+
+        provider._try_request.assert_any_call(
+            'DELETE', '/zones/42/addressing/regional_hostnames/www.unit.tests'
+        )
+
+    def test_region_extrachanges(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        existing_zone = Zone('unit.tests.', [])
+        desired_zone = Zone('unit.tests.', [])
+
+        existing = self._region_record(existing_zone, region='eu')
+        existing_zone.add_record(existing)
+        desired = self._region_record(desired_zone, region='us')
+        desired_zone.add_record(desired)
+
+        # region differs -> an Update is added
+        extra = provider._extra_changes(existing_zone, desired_zone, [])
+        self.assertEqual(1, len(extra))
+        self.assertIsInstance(extra[0], Update)
+
+        # region matches -> nothing extra
+        desired.octodns['cloudflare']['region'] = 'eu'
+        self.assertFalse(
+            provider._extra_changes(existing_zone, desired_zone, [])
+        )
+
+    @patch('octodns_cloudflare.BaseProvider._process_desired_zone')
+    def test_process_desired_zone_region(self, mock_base):
+        mock_base.side_effect = lambda desired: desired
+        provider = CloudflareProvider(
+            'test', 'email', 'token', strict_supports=False
+        )
+        zone = Zone('unit.tests.', [])
+
+        # region on a non-proxied record is allowed but warned (non-strict)
+        desired = zone.copy()
+        desired.add_record(
+            self._region_record(zone, name='grey', region='eu', proxied=False)
+        )
+        result = provider._process_desired_zone(desired)
+        self.assertEqual(1, len(result.records))
+        # the region is preserved (warned, not stripped) so it still applies
+        kept = next(iter(result.records))
+        self.assertEqual('eu', kept.octodns['cloudflare']['region'])
+
+        # in strict mode each unsupported case raises with a clear message
+        provider.strict_supports = True
+
+        # region on a non-proxied record
+        desired = zone.copy()
+        desired.add_record(
+            self._region_record(zone, name='grey', region='eu', proxied=False)
+        )
+        with self.assertRaises(SupportsException) as ctx:
+            provider._process_desired_zone(desired)
+        self.assertIn('non-proxied', str(ctx.exception))
+
+        # region on a non-proxiable record type
+        desired = zone.copy()
+        txt = Record.new(zone, 'txt', {'ttl': 300, 'type': 'TXT', 'value': 'v'})
+        txt.octodns['cloudflare'] = {'region': 'eu'}
+        desired.add_record(txt)
+        with self.assertRaises(SupportsException) as ctx:
+            provider._process_desired_zone(desired)
+        self.assertIn('only applies to', str(ctx.exception))
+
+        # conflicting regions across record types sharing a name
+        desired = zone.copy()
+        desired.add_record(self._region_record(zone, name='www', region='eu'))
+        aaaa = Record.new(
+            zone, 'www', {'ttl': 300, 'type': 'AAAA', 'value': '::1'}
+        )
+        aaaa.octodns['cloudflare'] = {'proxied': True, 'region': 'us'}
+        desired.add_record(aaaa)
+        with self.assertRaises(SupportsException) as ctx:
+            provider._process_desired_zone(desired)
+        self.assertIn('conflicting regions', str(ctx.exception))
+        self.assertIn('www.unit.tests.', str(ctx.exception))
+
+        # conflicting regions at the apex (covers the fqdn formatting branch)
+        desired = zone.copy()
+        apex_a = Record.new(
+            zone, '', {'ttl': 300, 'type': 'A', 'value': '1.2.3.4'}
+        )
+        apex_a.octodns['cloudflare'] = {'proxied': True, 'region': 'eu'}
+        apex_aaaa = Record.new(
+            zone, '', {'ttl': 300, 'type': 'AAAA', 'value': '::1'}
+        )
+        apex_aaaa.octodns['cloudflare'] = {'proxied': True, 'region': 'us'}
+        desired.add_record(apex_a)
+        desired.add_record(apex_aaaa)
+        with self.assertRaises(SupportsException) as ctx:
+            provider._process_desired_zone(desired)
+        self.assertIn('conflicting regions', str(ctx.exception))
+        self.assertIn('unit.tests.', str(ctx.exception))
+
+    def test_apply_update_region_change(self):
+        # a region-only change drives _apply_Update to PATCH the regional
+        # hostname; the dns record content is unchanged (round-trips equal)
+        provider = CloudflareProvider('test', 'email', 'token')
+        provider._zones = {'unit.tests.': {'id': '42', 'name_servers': []}}
+        provider.zone_records = Mock(
+            return_value=[
+                {
+                    "id": "rec1",
+                    "type": "A",
+                    "name": "www.unit.tests",
+                    "content": "1.2.3.4",
+                    "proxiable": True,
+                    "proxied": True,
+                    "ttl": 1,
+                    "zone_id": "42",
+                }
+            ]
+        )
+        provider._zone_regional_hostnames = {
+            'unit.tests.': {'www.unit.tests': 'eu'}
+        }
+        provider._try_request = Mock(return_value={})
+
+        zone = Zone('unit.tests.', [])
+        existing = Record.new(
+            zone, 'www', {'ttl': 1, 'type': 'A', 'value': '1.2.3.4'}
+        )
+        existing.octodns['cloudflare'] = {'proxied': True, 'region': 'eu'}
+        desired = Record.new(
+            zone, 'www', {'ttl': 1, 'type': 'A', 'value': '1.2.3.4'}
+        )
+        desired.octodns['cloudflare'] = {'proxied': True, 'region': 'us'}
+
+        provider._apply_Update(Update(existing, desired))
+
+        provider._try_request.assert_any_call(
+            'PATCH',
+            '/zones/42/addressing/regional_hostnames/www.unit.tests',
+            data={'region_key': 'us'},
+        )
+        self.assertEqual(
+            'us',
+            provider._zone_regional_hostnames['unit.tests.']['www.unit.tests'],
+        )
+
+    def test_apply_region_dedupes_shared_hostname(self):
+        # an A and AAAA on the same name share a single regional hostname;
+        # applying both in one run issues exactly one POST (the second sees the
+        # cache the first updated)
+        provider = CloudflareProvider('test', 'email', 'token')
+        provider._zones = {'unit.tests.': {'id': '42', 'name_servers': []}}
+        provider._zone_regional_hostnames = {'unit.tests.': {}}
+        provider._try_request = Mock(return_value={})
+
+        zone = Zone('unit.tests.', [])
+        a = Record.new(zone, 'www', {'ttl': 1, 'type': 'A', 'value': '1.2.3.4'})
+        a.octodns['cloudflare'] = {'proxied': True, 'region': 'eu'}
+        aaaa = Record.new(
+            zone, 'www', {'ttl': 1, 'type': 'AAAA', 'value': '::1'}
+        )
+        aaaa.octodns['cloudflare'] = {'proxied': True, 'region': 'eu'}
+
+        provider._apply_Create(Create(a))
+        provider._apply_Create(Create(aaaa))
+
+        regional = [
+            (c.args[0], c.args[1])
+            for c in provider._try_request.call_args_list
+            if 'addressing/regional_hostnames' in c.args[1]
+        ]
+        self.assertEqual(
+            [('POST', '/zones/42/addressing/regional_hostnames')], regional
+        )
 
     def test_proxiedrecordandnewttl_includechange_returnsfalse(self):
         provider = CloudflareProvider('test', 'email', 'token')

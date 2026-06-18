@@ -148,6 +148,7 @@ class CloudflareProvider(BaseProvider):
 
         self._zones = None
         self._zone_records = {}
+        self._zone_regional_hostnames = {}
         if self.pagerules:
             # copy the class static/ever present list of supported types into
             # an instance property so that when we modify it we won't change
@@ -542,9 +543,47 @@ class CloudflareProvider(BaseProvider):
                     if r['actions'][0]['id'] == 'forwarding_url':
                         records += [r]
 
+            # Cloudflare Regional Services (Data Localization) lives on a
+            # separate, hostname-keyed API surface — not on the dns_record
+            # object — so capture the zone's hostname -> region_key mapping
+            # here for _record_for to merge in.
+            self._zone_regional_hostnames[zone.name] = self._regional_hostnames(
+                zone_id, records
+            )
+
             self._zone_records[zone.name] = records
 
         return self._zone_records[zone.name]
+
+    def _regional_hostnames(self, zone_id, records):
+        '''
+        Return a ``{hostname: region_key}`` mapping for the zone's Cloudflare
+        Regional Services (Data Localization) configuration.
+
+        Regional hostnames are keyed strictly by FQDN — exactly one entry per
+        hostname, shared across all record types on that name — and are managed
+        via ``/zones/{zone_id}/addressing/regional_hostnames`` rather than the
+        dns_records object. Regions only apply to proxied (orange-cloud)
+        hostnames, so the extra request is skipped entirely for zones with no
+        proxiable records.
+
+        Note: confirmed against live zones, this endpoint returns a bare
+        ``result`` list with no ``result_info`` pagination envelope (one zone
+        returned 37 hostnames in a single unparameterized call) and ``null``
+        for zones with no regional hostnames. A single request therefore
+        suffices and ``_paginated_get`` (which expects ``result_info``) is
+        intentionally not used.
+        '''
+        if not any(r.get('type') in _PROXIABLE_RECORD_TYPES for r in records):
+            return {}
+        resp = self._try_request(
+            'GET', f'/zones/{zone_id}/addressing/regional_hostnames'
+        )
+        result = resp.get('result')
+        if not isinstance(result, list):
+            # zones with no regional hostnames return result=null
+            return {}
+        return {rh['hostname']: rh['region_key'] for rh in result}
 
     def _record_for(self, zone, name, _type, records, lenient):
         # rewrite Cloudflare proxied records
@@ -587,6 +626,20 @@ class CloudflareProvider(BaseProvider):
                 record.octodns['cloudflare']['tags'] = records[0]['tags']
             except KeyError:
                 record.octodns['cloudflare'] = {'tags': records[0]['tags']}
+
+        # update record region (Cloudflare Regional Services / Data
+        # Localization). Region is keyed by hostname on a separate API, so it's
+        # merged in here from the per-zone mapping captured in zone_records.
+        # Reads instance state only — never triggers a fetch — so callers that
+        # stub zone_records (and thus never populate the mapping) see no region.
+        region = self._zone_regional_hostnames.get(zone.name, {}).get(
+            records[0].get('name')
+        )
+        if region:
+            try:
+                record.octodns['cloudflare']['region'] = region
+            except KeyError:
+                record.octodns['cloudflare'] = {'region': region}
 
         return record
 
@@ -728,6 +781,32 @@ class CloudflareProvider(BaseProvider):
                 fallback = 'omitting the record'
                 self.supports_warn_or_except(msg, fallback)
                 desired.remove_record(record)
+
+        # Validate Cloudflare Regional Services (region) constraints. Region is
+        # keyed per-hostname on a separate API and only applies to proxied,
+        # proxiable records, so flag any desired state Cloudflare can't honor.
+        proxiable_regions = defaultdict(set)
+        for record in desired.records:
+            region = self._record_region(record)
+            if record._type in _PROXIABLE_RECORD_TYPES:
+                proxiable_regions[record.name].add(region)
+                if region is not None and not self._record_is_proxied(record):
+                    msg = f'region is set on non-proxied record {record.fqdn}'
+                    fallback = 'applying region anyway; it has no effect until the record is proxied'
+                    self.supports_warn_or_except(msg, fallback)
+            elif region is not None:
+                types = ', '.join(sorted(_PROXIABLE_RECORD_TYPES))
+                msg = f'region is set on {record._type} record {record.fqdn}; Cloudflare Regional Services only applies to {types} records'
+                fallback = 'ignoring region'
+                self.supports_warn_or_except(msg, fallback)
+
+        for name, regions in proxiable_regions.items():
+            if len(regions) > 1:
+                shown = sorted(r if r is not None else 'none' for r in regions)
+                fqdn = f'{name}.{desired.name}' if name else desired.name
+                msg = f'conflicting regions {shown} configured for records named {fqdn}; Cloudflare applies a single region per hostname'
+                fallback = 'the last record applied determines the region'
+                self.supports_warn_or_except(msg, fallback)
 
         return super()._process_desired_zone(desired)
 
@@ -924,6 +1003,10 @@ class CloudflareProvider(BaseProvider):
         'Returns nonduplicate record tags'
         return set(record.octodns.get('cloudflare', {}).get('tags', []))
 
+    def _record_region(self, record):
+        'Returns the Cloudflare Regional Services region_key, or None'
+        return record.octodns.get('cloudflare', {}).get('region', None)
+
     def _gen_data(self, record):
         name = record.fqdn[:-1]
         _type = record._type
@@ -1058,6 +1141,50 @@ class CloudflareProvider(BaseProvider):
 
         return data['content']
 
+    def _apply_region(self, record, desired_region):
+        '''
+        Reconcile a record's Cloudflare Regional Services region against the
+        zone's current regional hostnames.
+
+        Region lives on a separate, hostname-keyed API
+        (``/zones/{id}/addressing/regional_hostnames``), so it can't ride along
+        with the dns_record write and instead needs its own POST (add), PATCH
+        (change region_key) or DELETE (remove). ``desired_region`` is passed
+        explicitly so deletes can force removal (None) regardless of the
+        record's own octodns config. The per-zone mapping captured during
+        populate is kept in sync so multiple records sharing a hostname don't
+        issue redundant calls within a single apply.
+        '''
+        if record._type not in _PROXIABLE_RECORD_TYPES:
+            # Regional Services only applies to proxiable hostnames; other
+            # types never have a regional hostname to reconcile.
+            return
+        zone = record.zone
+        zone_id = self.zones[zone.name]['id']
+        hostname = record.fqdn[:-1]
+        current_map = self._zone_regional_hostnames.setdefault(zone.name, {})
+        current = current_map.get(hostname)
+        if desired_region == current:
+            return
+        path = f'/zones/{zone_id}/addressing/regional_hostnames'
+        if desired_region is None:
+            self._try_request('DELETE', f'{path}/{hostname}')
+            current_map.pop(hostname, None)
+        elif current is None:
+            self._try_request(
+                'POST',
+                path,
+                data={'hostname': hostname, 'region_key': desired_region},
+            )
+            current_map[hostname] = desired_region
+        else:
+            self._try_request(
+                'PATCH',
+                f'{path}/{hostname}',
+                data={'region_key': desired_region},
+            )
+            current_map[hostname] = desired_region
+
     def _apply_Create(self, change):
         new = change.new
         zone_id = self.zones[new.zone.name]['id']
@@ -1067,6 +1194,7 @@ class CloudflareProvider(BaseProvider):
             path = f'/zones/{zone_id}/dns_records'
         for content in self._gen_data(new):
             self._try_request('POST', path, data=content)
+        self._apply_region(new, self._record_region(new))
 
     def _apply_Update(self, change):
         zone = change.new.zone
@@ -1198,6 +1326,8 @@ class CloudflareProvider(BaseProvider):
             )
             self._try_request('DELETE', path)
 
+        self._apply_region(change.new, self._record_region(change.new))
+
     def _apply_Delete(self, change):
         existing = change.existing
         existing_name = existing.fqdn[:-1]
@@ -1235,6 +1365,11 @@ class CloudflareProvider(BaseProvider):
                         f'{record["id"]}'
                     )
                     self._try_request('DELETE', path)
+
+        # Remove any regional hostname for the deleted record. Region is keyed
+        # per-hostname, so if another proxiable record keeps this name its
+        # region is re-created on the next sync (drift self-heals).
+        self._apply_region(existing, None)
 
     def _available_plans(self, zone_name):
         zone_id = self.zones.get(zone_name, {}).get('id', None)
@@ -1353,6 +1488,7 @@ class CloudflareProvider(BaseProvider):
 
         # clear the cache
         self._zone_records.pop(zone_name, None)
+        self._zone_regional_hostnames.pop(zone_name, None)
 
     def _extra_changes(self, existing, desired, changes):
         extra_changes = []
@@ -1382,6 +1518,11 @@ class CloudflareProvider(BaseProvider):
                 extra_changes.append(Update(existing_record, desired_record))
 
             if self._record_tags(existing_record) != self._record_tags(
+                desired_record
+            ):
+                extra_changes.append(Update(existing_record, desired_record))
+
+            if self._record_region(existing_record) != self._record_region(
                 desired_record
             ):
                 extra_changes.append(Update(existing_record, desired_record))
@@ -1439,6 +1580,18 @@ class CloudflareInternalProvider(CloudflareProvider):
             **kwargs,
         )
         self.view_id = view_id
+
+    def _regional_hostnames(self, zone_id, records):
+        # Internal zones have no proxy/edge (Cloudflare Gateway resolves them
+        # directly), so Regional Services / Data Localization does not apply.
+        # Never issue the addressing request for an internal zone.
+        return {}
+
+    def _record_region(self, record):
+        # Region is not a concept for internal zones (no edge). Treating it as
+        # always-absent keeps the inherited validate/apply paths from ever
+        # touching the addressing API for an internal zone.
+        return None
 
     def _internal_zone_ids_from_views(self):
         base = f'/accounts/{self.account_id}/dns_settings/views'
