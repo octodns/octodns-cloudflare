@@ -1,3 +1,8 @@
+## 1.2.0 - 2026-06-19
+
+Minor:
+* Add CloudflareInternalProvider for Cloudflare Internal DNS zones (type=internal); supports record management in pre-existing internal zones with optional view_id filter. See #170. - [#171](https://github.com/octodns/octodns-cloudflare/pull/171)
+
 ## 1.1.0 - 2026-04-03
 
 Minor:
