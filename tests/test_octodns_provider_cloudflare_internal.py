@@ -4,6 +4,7 @@
 
 from os.path import dirname, join
 from unittest import TestCase
+from unittest.mock import Mock
 
 from requests_mock import mock as requests_mock
 
@@ -42,7 +43,7 @@ class TestCloudflareInternalProvider(TestCase):
         self.assertIn('account_id is required', str(ctx.exception))
 
     def test_init_rejects_public_only_params(self):
-        for forbidden in ('cdn', 'pagerules', 'plan_type'):
+        for forbidden in ('cdn', 'pagerules', 'plan_type', 'regional_services'):
             with self.assertRaises(ProviderException) as ctx:
                 CloudflareInternalProvider(
                     'test',
@@ -647,3 +648,64 @@ class TestCloudflareInternalProvider(TestCase):
 
             zone = Zone('corp.internal.tests.', [])
             provider.zone_records(zone)
+
+    def test_regional_hostnames_not_queried(self):
+        # Internal zones have no proxy/edge, so Regional Services must never be
+        # queried even though the internal records are proxiable types.
+        provider = self._provider()
+
+        provider._zones = {
+            'corp.internal.tests.': {
+                'id': ZONE_ID,
+                'cloudflare_plan': None,
+                'name_servers': [],
+            }
+        }
+
+        with requests_mock() as mock:
+            mock.get(
+                f'https://api.cloudflare.com/client/v4/zones/{ZONE_ID}'
+                '/dns_records?page=1&per_page=100',
+                text=fixture('cloudflare-internal-dns_records.json'),
+            )
+
+            def _forbidden(request, context):
+                raise AssertionError(
+                    f'regional services must not be queried; saw {request.url}'
+                )
+
+            mock.get(
+                f'https://api.cloudflare.com/client/v4/zones/{ZONE_ID}'
+                '/addressing/regional_hostnames',
+                json=_forbidden,
+            )
+
+            zone = Zone('corp.internal.tests.', [])
+            provider.zone_records(zone)
+
+        self.assertEqual({}, provider._zone_regional_hostnames[zone.name])
+
+    def test_apply_does_not_touch_regional_hostnames(self):
+        # internal zones force regional_services off, so region reconciliation
+        # is a no-op even when a record carries a region — the addressing API
+        # is never written to
+        provider = self._provider()
+        self.assertFalse(provider.regional_services)
+        provider._zones = {
+            'corp.internal.tests.': {
+                'id': ZONE_ID,
+                'cloudflare_plan': None,
+                'name_servers': [],
+            }
+        }
+        provider._try_request = Mock(return_value={})
+
+        zone = Zone('corp.internal.tests.', [])
+        record = Record.new(
+            zone, 'api', {'ttl': 300, 'type': 'A', 'value': '10.0.0.1'}
+        )
+        record.octodns['cloudflare'] = {'proxied': True, 'region': 'eu'}
+        zone.add_record(record)
+        provider._reconcile_regions(Mock(desired=zone, existing=zone))
+
+        provider._try_request.assert_not_called()
