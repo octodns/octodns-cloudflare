@@ -43,7 +43,7 @@ class TestCloudflareInternalProvider(TestCase):
         self.assertIn('account_id is required', str(ctx.exception))
 
     def test_init_rejects_public_only_params(self):
-        for forbidden in ('cdn', 'pagerules', 'plan_type'):
+        for forbidden in ('cdn', 'pagerules', 'plan_type', 'regional_services'):
             with self.assertRaises(ProviderException) as ctx:
                 CloudflareInternalProvider(
                     'test',
@@ -686,9 +686,11 @@ class TestCloudflareInternalProvider(TestCase):
         self.assertEqual({}, provider._zone_regional_hostnames[zone.name])
 
     def test_apply_does_not_touch_regional_hostnames(self):
-        # internal zones must never issue regional/addressing requests, even
-        # when applying changes to proxiable (A/AAAA/CNAME) records
+        # internal zones force regional_services off, so region reconciliation
+        # is a no-op even when a record carries a region — the addressing API
+        # is never written to
         provider = self._provider()
+        self.assertFalse(provider.regional_services)
         provider._zones = {
             'corp.internal.tests.': {
                 'id': ZONE_ID,
@@ -702,7 +704,8 @@ class TestCloudflareInternalProvider(TestCase):
         record = Record.new(
             zone, 'api', {'ttl': 300, 'type': 'A', 'value': '10.0.0.1'}
         )
-        provider._apply_Create(Create(record))
+        record.octodns['cloudflare'] = {'proxied': True, 'region': 'eu'}
+        zone.add_record(record)
+        provider._reconcile_regions(Mock(desired=zone, existing=zone))
 
-        for call_obj in provider._try_request.call_args_list:
-            self.assertNotIn('regional_hostnames', call_obj.args[1])
+        provider._try_request.assert_not_called()

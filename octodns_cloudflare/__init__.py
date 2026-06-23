@@ -98,6 +98,7 @@ class CloudflareProvider(BaseProvider):
         cdn=False,
         pagerules=True,
         plan_type=None,
+        regional_services=False,
         retry_count=4,
         retry_period=300,
         auth_error_retry_count=0,
@@ -136,6 +137,7 @@ class CloudflareProvider(BaseProvider):
         self.cdn = cdn
         self.pagerules = pagerules
         self.plan_type = plan_type
+        self.regional_services = regional_services
         self.retry_count = retry_count
         self.retry_period = retry_period
         self.auth_error_retry_count = auth_error_retry_count
@@ -563,17 +565,24 @@ class CloudflareProvider(BaseProvider):
         Regional hostnames are keyed strictly by FQDN — exactly one entry per
         hostname, shared across all record types on that name — and are managed
         via ``/zones/{zone_id}/addressing/regional_hostnames`` rather than the
-        dns_records object. Regions only apply to proxied (orange-cloud)
-        hostnames, so the extra request is skipped entirely for zones with no
-        proxiable records.
+        dns_records object.
 
-        Note: confirmed against live zones, this endpoint returns a bare
-        ``result`` list with no ``result_info`` pagination envelope (one zone
-        returned 37 hostnames in a single unparameterized call) and ``null``
-        for zones with no regional hostnames. A single request therefore
-        suffices and ``_paginated_get`` (which expects ``result_info``) is
-        intentionally not used.
+        Regional Services is an Enterprise add-on, and this endpoint can fail
+        with an undocumented status for non-entitled accounts, so the whole
+        feature is opt-in via the ``regional_services`` provider flag: the
+        request is never issued unless it's enabled. It's additionally skipped
+        for zones with no proxiable records, since regions only apply to those.
+
+        Note: this endpoint is not paginated. Cloudflare's own SDK models it as
+        a single page (``cloudflare-go`` returns ``SinglePage`` whose
+        ``GetNextPage`` is documented as never returning a next page), it
+        accepts no ``page``/``per_page`` params, returns a bare ``result`` list
+        with no ``result_info`` envelope, and returns ``null`` for zones with
+        no regional hostnames. A single request therefore suffices, and
+        ``_paginated_get`` (which expects ``result_info``) would in fact raise.
         '''
+        if not self.regional_services:
+            return {}
         if not any(r.get('type') in _PROXIABLE_RECORD_TYPES for r in records):
             return {}
         resp = self._try_request(
@@ -632,10 +641,14 @@ class CloudflareProvider(BaseProvider):
         # merged in here from the per-zone mapping captured in zone_records.
         # Reads instance state only — never triggers a fetch — so callers that
         # stub zone_records (and thus never populate the mapping) see no region.
+        # The mapping is hostname-keyed and a region applies to every record
+        # type at that name, but only attach it to proxiable record types: a
+        # co-located TXT/MX would otherwise pick up a region it can't carry and
+        # generate a phantom Update on every sync.
         region = self._zone_regional_hostnames.get(zone.name, {}).get(
             records[0].get('name')
         )
-        if region:
+        if region and _type in _PROXIABLE_RECORD_TYPES:
             try:
                 record.octodns['cloudflare']['region'] = region
             except KeyError:
@@ -782,6 +795,12 @@ class CloudflareProvider(BaseProvider):
                 self.supports_warn_or_except(msg, fallback)
                 desired.remove_record(record)
 
+        if self.regional_services:
+            self._validate_regions(desired)
+
+        return super()._process_desired_zone(desired)
+
+    def _validate_regions(self, desired):
         # Validate Cloudflare Regional Services (region) constraints. Region is
         # keyed per-hostname on a separate API and only applies to proxied,
         # proxiable records, so flag any desired state Cloudflare can't honor.
@@ -807,8 +826,6 @@ class CloudflareProvider(BaseProvider):
                 msg = f'conflicting regions {shown} configured for records named {fqdn}; Cloudflare applies a single region per hostname'
                 fallback = 'the last record applied determines the region'
                 self.supports_warn_or_except(msg, fallback)
-
-        return super()._process_desired_zone(desired)
 
     def _contents_for_multiple(self, record):
         for value in record.values:
@@ -1141,49 +1158,72 @@ class CloudflareProvider(BaseProvider):
 
         return data['content']
 
-    def _apply_region(self, record, desired_region):
+    def _reconcile_regions(self, plan):
         '''
-        Reconcile a record's Cloudflare Regional Services region against the
-        zone's current regional hostnames.
+        Reconcile Cloudflare Regional Services (region) for the whole zone in a
+        single pass at the end of apply.
 
-        Region lives on a separate, hostname-keyed API
-        (``/zones/{id}/addressing/regional_hostnames``), so it can't ride along
-        with the dns_record write and instead needs its own POST (add), PATCH
-        (change region_key) or DELETE (remove). ``desired_region`` is passed
-        explicitly so deletes can force removal (None) regardless of the
-        record's own octodns config. The per-zone mapping captured during
-        populate is kept in sync so multiple records sharing a hostname don't
-        issue redundant calls within a single apply.
+        Region is a per-hostname property on a separate, hostname-keyed API
+        (``/zones/{id}/addressing/regional_hostnames``), not a per-record one,
+        so it can't be reconciled safely record-by-record — deleting one record
+        of a shared hostname must not strip a region another record still
+        wants. This computes the desired region for every proxiable hostname in
+        ``plan.desired`` and diffs it against the zone's current regional
+        hostnames (captured during populate), issuing the minimal POST (add) /
+        PATCH (change region_key) / DELETE (remove) set. Removals are limited to
+        hostnames octoDNS manages (present in existing or desired) so
+        unmanaged/orphan regional hostnames in the zone are left untouched.
         '''
-        if record._type not in _PROXIABLE_RECORD_TYPES:
-            # Regional Services only applies to proxiable hostnames; other
-            # types never have a regional hostname to reconcile.
+        if not self.regional_services:
             return
-        zone = record.zone
+        zone = plan.desired
         zone_id = self.zones[zone.name]['id']
-        hostname = record.fqdn[:-1]
-        current_map = self._zone_regional_hostnames.setdefault(zone.name, {})
-        current = current_map.get(hostname)
-        if desired_region == current:
-            return
-        path = f'/zones/{zone_id}/addressing/regional_hostnames'
-        if desired_region is None:
-            self._try_request('DELETE', f'{path}/{hostname}')
-            current_map.pop(hostname, None)
-        elif current is None:
-            self._try_request(
-                'POST',
-                path,
-                data={'hostname': hostname, 'region_key': desired_region},
-            )
-            current_map[hostname] = desired_region
-        else:
-            self._try_request(
-                'PATCH',
-                f'{path}/{hostname}',
-                data={'region_key': desired_region},
-            )
-            current_map[hostname] = desired_region
+
+        # desired region per hostname — one entry per FQDN, contributed only by
+        # proxiable, region-bearing records. Sorted so the outcome is
+        # deterministic if a hostname has conflicting regions across record
+        # types (a misconfig _validate_regions already flags): last one wins,
+        # but stably, so apply doesn't flap between syncs.
+        desired = {}
+        for record in sorted(zone.records, key=lambda r: (r.name, r._type)):
+            if record._type not in _PROXIABLE_RECORD_TYPES:
+                continue
+            region = self._record_region(record)
+            if region is not None:
+                desired[record.fqdn[:-1]] = region
+
+        # hostnames octoDNS manages, so we never delete orphan/unmanaged
+        # regional hostnames that exist in the zone but aren't in our config
+        managed = set(desired)
+        for source in (plan.existing, zone):
+            if source is None:
+                continue
+            for record in source.records:
+                if record._type in _PROXIABLE_RECORD_TYPES:
+                    managed.add(record.fqdn[:-1])
+
+        current = self._zone_regional_hostnames.get(zone.name, {})
+        base = f'/zones/{zone_id}/addressing/regional_hostnames'
+
+        # additions and region_key changes
+        for hostname, region in sorted(desired.items()):
+            if current.get(hostname) == region:
+                continue
+            if hostname in current:
+                self._try_request(
+                    'PATCH', f'{base}/{hostname}', data={'region_key': region}
+                )
+            else:
+                self._try_request(
+                    'POST',
+                    base,
+                    data={'hostname': hostname, 'region_key': region},
+                )
+
+        # removals — managed hostnames that no longer want a region
+        for hostname in sorted(current):
+            if hostname in managed and hostname not in desired:
+                self._try_request('DELETE', f'{base}/{hostname}')
 
     def _apply_Create(self, change):
         new = change.new
@@ -1194,7 +1234,6 @@ class CloudflareProvider(BaseProvider):
             path = f'/zones/{zone_id}/dns_records'
         for content in self._gen_data(new):
             self._try_request('POST', path, data=content)
-        self._apply_region(new, self._record_region(new))
 
     def _apply_Update(self, change):
         zone = change.new.zone
@@ -1326,8 +1365,6 @@ class CloudflareProvider(BaseProvider):
             )
             self._try_request('DELETE', path)
 
-        self._apply_region(change.new, self._record_region(change.new))
-
     def _apply_Delete(self, change):
         existing = change.existing
         existing_name = existing.fqdn[:-1]
@@ -1365,11 +1402,6 @@ class CloudflareProvider(BaseProvider):
                         f'{record["id"]}'
                     )
                     self._try_request('DELETE', path)
-
-        # Remove any regional hostname for the deleted record. Region is keyed
-        # per-hostname, so if another proxiable record keeps this name its
-        # region is re-created on the next sync (drift self-heals).
-        self._apply_region(existing, None)
 
     def _available_plans(self, zone_name):
         zone_id = self.zones.get(zone_name, {}).get('id', None)
@@ -1486,6 +1518,10 @@ class CloudflareProvider(BaseProvider):
             class_name = change.__class__.__name__
             getattr(self, f'_apply_{class_name}')(change)
 
+        # Region is a per-hostname property on a separate API; reconcile it for
+        # the whole zone once, after the per-record changes are applied.
+        self._reconcile_regions(plan)
+
         # clear the cache
         self._zone_records.pop(zone_name, None)
         self._zone_regional_hostnames.pop(zone_name, None)
@@ -1522,8 +1558,9 @@ class CloudflareProvider(BaseProvider):
             ):
                 extra_changes.append(Update(existing_record, desired_record))
 
-            if self._record_region(existing_record) != self._record_region(
-                desired_record
+            if self.regional_services and (
+                self._record_region(existing_record)
+                != self._record_region(desired_record)
             ):
                 extra_changes.append(Update(existing_record, desired_record))
 
@@ -1555,7 +1592,7 @@ class CloudflareInternalProvider(CloudflareProvider):
     # leak URLFWD into this subclass.
     SUPPORTS = set(CloudflareProvider.SUPPORTS)
 
-    _FORBIDDEN_PARAMS = ('cdn', 'pagerules', 'plan_type')
+    _FORBIDDEN_PARAMS = ('cdn', 'pagerules', 'plan_type', 'regional_services')
 
     def __init__(self, id, *args, account_id=None, view_id=None, **kwargs):
         if account_id is None:
@@ -1567,9 +1604,14 @@ class CloudflareInternalProvider(CloudflareProvider):
             if forbidden in kwargs:
                 raise CloudflareInternalProviderException(
                     f'{id}: {forbidden!r} is not supported — Cloudflare '
-                    'internal zones do not have proxy, pagerules, or a plan'
+                    'internal zones have no proxy, pagerules, plan, or '
+                    'regional services'
                 )
         # Parent defaults pagerules=True, which would re-add URLFWD to SUPPORTS.
+        # regional_services is forced off: internal zones have no edge, so the
+        # addressing API never applies. That single switch gates every region
+        # code path inherited from CloudflareProvider (fetch, validate,
+        # reconcile), so no per-method overrides are needed here.
         super().__init__(
             id,
             *args,
@@ -1577,21 +1619,10 @@ class CloudflareInternalProvider(CloudflareProvider):
             cdn=False,
             pagerules=False,
             plan_type=None,
+            regional_services=False,
             **kwargs,
         )
         self.view_id = view_id
-
-    def _regional_hostnames(self, zone_id, records):
-        # Internal zones have no proxy/edge (Cloudflare Gateway resolves them
-        # directly), so Regional Services / Data Localization does not apply.
-        # Never issue the addressing request for an internal zone.
-        return {}
-
-    def _record_region(self, record):
-        # Region is not a concept for internal zones (no edge). Treating it as
-        # always-absent keeps the inherited validate/apply paths from ever
-        # touching the addressing API for an internal zone.
-        return None
 
     def _internal_zone_ids_from_views(self):
         base = f'/accounts/{self.account_id}/dns_settings/views'

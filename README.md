@@ -161,6 +161,16 @@ name:
 
 Note: `A`, `AAAA`, `CNAME` and `ALIAS` records support a Cloudflare [Regional Services](https://developers.cloudflare.com/data-localization/regional-services/) (Data Localization) `region`. The value is the Cloudflare `region_key` (e.g. `eu`, `isoeu`, `us`, `ca`, …).
 
+This is **opt-in**: set `regional_services: true` on the provider to enable it. When disabled (the default), the provider never calls the regional services API — no behaviour change and no extra request for existing users. This matters because Regional Services is an Enterprise add-on and the API errors for accounts without the entitlement.
+
+```yaml
+providers:
+  cloudflare:
+    class: octodns_cloudflare.CloudflareProvider
+    token: env/CLOUDFLARE_TOKEN
+    regional_services: true
+```
+
 ```yaml
 www:
     octodns:
@@ -178,6 +188,7 @@ Constraints, because Cloudflare manages regions per-hostname on a separate API (
 - Regions only take effect on **proxied** records. A `region` on a non-proxied record is applied but inert until the record is proxied; it is reported via `strict_supports`.
 - Regional Services is a Cloudflare **Enterprise** add-on and must be enabled on the account before any region can be set.
 - The existing `DNS:Read`/`DNS:Edit` token permissions already cover the regional hostnames API — no additional scope is required.
+- **Adoption:** if a zone already has regional hostnames configured, add the matching `region:` to your records **before** the first sync — otherwise octoDNS sees no region in your config and removes the existing regional hostnames. `octodns-dump` (with `regional_services: true`) emits the current `region` values to start from.
 
 ### Support Information
 
