@@ -159,6 +159,56 @@ name:
     value: 1.2.3.4
 ```
 
+Note: Cloudflare stores `comment` and `tags` on each individual DNS object — that is, per *value*. The record-level `comment`/`tags` above are applied to every value of a record. To set them per value, add a `values` list under `octodns.cloudflare`, where each entry names a `value` (in the same form it appears in the record's `values`) and its own `comment` and/or `tags`:
+
+```yaml
+multi:
+    octodns:
+        cloudflare:
+            comment: "default applied to values without an entry"
+            tags:
+              - "team:web"
+            values:
+              - value: 1.2.3.5
+                comment: "failover box"
+                tags:
+                  - "team:web"
+                  - "deprecated"
+    ttl: 300
+    type: A
+    values:
+      - 1.2.3.4   # uses the record-level comment/tags above
+      - 1.2.3.5   # uses its own entry
+```
+
+A value's entry is a clean override: a `comment`/`tags` it specifies replaces the record-level one for that value (tags are not merged), while a field it omits falls back to the record level. Records whose values all share the same metadata keep the simpler record-level form shown earlier. Structured-value types work the same way — the entry's `value` is the structured form, e.g. for `MX`:
+
+```yaml
+'':
+    octodns:
+        cloudflare:
+            values:
+              - value:
+                  preference: 10
+                  exchange: mx1.example.com.
+                comment: "primary MX"
+              - value:
+                  preference: 20
+                  exchange: mx2.example.com.
+                comment: "backup MX"
+    ttl: 300
+    type: MX
+    values:
+      - preference: 10
+        exchange: mx1.example.com.
+      - preference: 20
+        exchange: mx2.example.com.
+```
+
+A per-value entry whose `value` does not match any of the record's values is reported at plan time (raised under `strict_supports`, otherwise warned), as is a malformed `values` list. Cloudflare can hold two objects with the same value but different metadata, which can't be represented per-value; in that case the first is kept and a warning is logged on dump.
+
+The `TagAllowListFilter`/`TagRejectListFilter` [processors](#processors) consider a record's per-value tags as well as its record-level tags — a record is treated as carrying a tag if any of its values do.
+
 Note: `A`, `AAAA`, `CNAME` and `ALIAS` records support a Cloudflare [Regional Services](https://developers.cloudflare.com/data-localization/regional-services/) (Data Localization) `region`. The value is the Cloudflare `region_key` (e.g. `eu`, `isoeu`, `us`, `ca`, …).
 
 This is **opt-in**: set `regional_services: true` on the provider to enable it. When disabled (the default), the provider never calls the regional services API — no behaviour change and no extra request for existing users. This matters because Regional Services is an Enterprise add-on and the API errors for accounts without the entitlement.

@@ -599,6 +599,9 @@ class CloudflareProvider(BaseProvider):
         proxied = records[0].get('proxied', False)
         if self.cdn and proxied:
             data = self._data_for_cdn(name, _type, records)
+            # CDN rewrites collapse to a single synthetic CNAME, so there's no
+            # per-value metadata to read back; flagged with data_for=None below.
+            data_for = None
         else:
             # Cloudflare supports ALIAS semantics with root CNAMEs
             if _type == 'CNAME' and name == '':
@@ -620,21 +623,19 @@ class CloudflareProvider(BaseProvider):
             self.log.debug('_record_for: auto-ttl=True')
             record.octodns['cloudflare'] = {'auto-ttl': True}
 
-        # update record comment
-        if records[0].get('comment'):
-            try:
-                record.octodns['cloudflare']['comment'] = records[0]['comment']
-            except KeyError:
-                record.octodns['cloudflare'] = {
-                    'comment': records[0]['comment']
-                }
-
-        # update record tags
-        if records[0].get('tags'):
-            try:
-                record.octodns['cloudflare']['tags'] = records[0]['tags']
-            except KeyError:
-                record.octodns['cloudflare'] = {'tags': records[0]['tags']}
+        # update record comment & tags. Cloudflare keeps these on each
+        # individual DNS object (one per value); when every value shares the
+        # same metadata we use the record-level octodns.cloudflare shorthand,
+        # when they differ we emit a per-value list keyed by value (see
+        # _populate_value_metadata). CDN rewrites keep the simple form.
+        if data_for is None:
+            cloudflare = record.octodns.setdefault('cloudflare', {})
+            if records[0].get('comment'):
+                cloudflare['comment'] = records[0]['comment']
+            if records[0].get('tags'):
+                cloudflare['tags'] = records[0]['tags']
+        else:
+            self._populate_value_metadata(record, _type, records, data_for)
 
         # update record region (Cloudflare Regional Services / Data
         # Localization). Region is keyed by hostname on a separate API, so it's
@@ -798,7 +799,53 @@ class CloudflareProvider(BaseProvider):
         if self.regional_services:
             self._validate_regions(desired)
 
+        self._validate_value_metadata(desired)
+
         return super()._process_desired_zone(desired)
+
+    def _validate_value_metadata(self, desired):
+        '''Per-value comment/tags (octodns.cloudflare.values) must reference
+        values that actually exist on the record. Catch mismatches at plan
+        time, where supports_warn_or_except can surface them, rather than
+        letting an entry silently no-op during apply.'''
+        for record in desired.records:
+            entries = record.octodns.get('cloudflare', {}).get('values')
+            if entries is None:
+                continue
+            if not isinstance(entries, list):
+                msg = (
+                    f'{record.fqdn} {record._type}: octodns.cloudflare.values '
+                    f'must be a list of per-value entries'
+                )
+                self.supports_warn_or_except(
+                    msg, 'ignoring octodns.cloudflare.values'
+                )
+                continue
+            actual = {
+                self._meta_value_key(getattr(value, 'data', value))
+                for value in self._values_in_content_order(record)
+            }
+            for entry in entries:
+                if not isinstance(entry, dict) or 'value' not in entry:
+                    msg = (
+                        f'{record.fqdn} {record._type}: each '
+                        f'octodns.cloudflare.values entry must be a mapping '
+                        f'with a \'value\' key; got {entry!r}'
+                    )
+                    self.supports_warn_or_except(
+                        msg, 'ignoring the malformed entry'
+                    )
+                    continue
+                if self._meta_value_key(entry['value']) not in actual:
+                    msg = (
+                        f'{record.fqdn} {record._type}: octodns.cloudflare '
+                        f'per-value metadata references value '
+                        f'{entry["value"]!r} which is not one of the '
+                        f'record\'s values'
+                    )
+                    self.supports_warn_or_except(
+                        msg, 'ignoring the unmatched per-value metadata entry'
+                    )
 
     def _validate_regions(self, desired):
         # Validate Cloudflare Regional Services (region) constraints. Region is
@@ -1012,13 +1059,158 @@ class CloudflareProvider(BaseProvider):
             and record.octodns.get('cloudflare', {}).get('auto-ttl', False)
         )
 
-    def _record_comment(self, record):
-        'Returns record comment'
+    def _values_in_content_order(self, record):
+        '''The record's value objects, parallel to _contents_for_<type>()
+        output. Single-value (ValueMixin) types expose .value; multi-value
+        (ValuesMixin) types expose .values.'''
+        values = getattr(record, 'values', None)
+        if values is None:
+            return [record.value]
+        return values
+
+    def _meta_value_key(self, value):
+        '''A hashable, comparison-stable key for a value in its native
+        (octoDNS data) form. Normalizes str subclasses (e.g. Ipv4Value) to
+        plain str and dict/list values (e.g. MX) to nested tuples so that a
+        value read from Cloudflare and the same value authored in YAML compare
+        equal.'''
+        if isinstance(value, dict):
+            return tuple(
+                sorted((k, self._meta_value_key(v)) for k, v in value.items())
+            )
+        if isinstance(value, (list, tuple)):
+            return tuple(self._meta_value_key(v) for v in value)
+        if isinstance(value, str):
+            return str(value)
+        return value
+
+    @staticmethod
+    def _norm_meta(meta):
+        '''Order-insensitive form of a (comment, tags) pair for comparison —
+        octoDNS treats tags as a set, so [a, b] and [b, a] are equal.'''
+        if meta is None:
+            return None
+        comment, tags = meta
+        return (comment, frozenset(tags))
+
+    def _value_metadata(self, record):
+        '''Per-value metadata entries (octodns.cloudflare.values) keyed by
+        value. Empty when the record uses the record-level shorthand.
+        Tolerant of malformed config (which _validate_value_metadata reports
+        at plan time) so a lenient run degrades rather than crashing.'''
+        entries = record.octodns.get('cloudflare', {}).get('values')
+        if not isinstance(entries, list):
+            return {}
+        return {
+            self._meta_value_key(entry.get('value')): entry
+            for entry in entries
+            if isinstance(entry, dict) and 'value' in entry
+        }
+
+    def _populate_value_metadata(self, record, _type, records, data_for):
+        '''Read comment/tags off each Cloudflare object and attach them to the
+        octoDNS record.
+
+        Cloudflare stores comment/tags on each individual DNS object (one per
+        value). When every value carries identical metadata we keep the
+        record-level octodns.cloudflare.comment/tags shorthand (backwards
+        compatible); when they differ we emit an explicit per-value list keyed
+        by value. Two objects sharing a value but differing in metadata can't
+        be represented per-value — we keep the first and warn.'''
+        # value-key -> (native value, meta) in first-seen order; meta is a
+        # (comment, tags-tuple) preserving Cloudflare's tag order, or None when
+        # the object has neither. _norm_meta gives an order-insensitive form
+        # for comparisons (tags are a set as far as octoDNS is concerned).
+        metadata = {}
+        order = []
+        for r in records:
+            comment = r.get('comment') or ''
+            tags = tuple(r.get('tags') or [])
+            meta = (comment, tags) if (comment or tags) else None
+            single = data_for(_type, [r])
+            native = (
+                single['values'][0]
+                if 'values' in single
+                else single.get('value')
+            )
+            key = self._meta_value_key(native)
+            if key in metadata:
+                if self._norm_meta(metadata[key][1]) != self._norm_meta(meta):
+                    self.log.warning(
+                        '%s %s: Cloudflare has multiple objects for value %r '
+                        'with differing comment/tags; octoDNS cannot represent '
+                        'per-object metadata for duplicate values — keeping '
+                        'the first',
+                        record.fqdn,
+                        _type,
+                        native,
+                    )
+                continue
+            metadata[key] = (native, meta)
+            order.append(key)
+
+        metas = [metadata[key] for key in order]
+        if all(meta is None for _native, meta in metas):
+            return
+
+        cloudflare = record.octodns.setdefault('cloudflare', {})
+        distinct = {self._norm_meta(meta) for _native, meta in metas}
+        if len(distinct) == 1:
+            # every value shares the same metadata -> record-level shorthand
+            comment, tags = metas[0][1]
+            if comment:
+                cloudflare['comment'] = comment
+            if tags:
+                cloudflare['tags'] = list(tags)
+            return
+
+        # values differ -> explicit per-value list, sorted for determinism
+        values_meta = []
+        for native, meta in sorted(
+            metas, key=lambda m: self._meta_value_key(m[0])
+        ):
+            if meta is None:
+                continue
+            comment, tags = meta
+            entry = {'value': native}
+            if comment:
+                entry['comment'] = comment
+            if tags:
+                entry['tags'] = list(tags)
+            values_meta.append(entry)
+        cloudflare['values'] = values_meta
+
+    def _record_comment(self, record, value):
+        '''Returns the comment for a value: its per-value override if set,
+        otherwise the record-level comment.'''
+        entry = self._value_metadata(record).get(
+            self._meta_value_key(getattr(value, 'data', value))
+        )
+        if entry is not None and 'comment' in entry:
+            return entry['comment']
         return record.octodns.get('cloudflare', {}).get('comment', '')
 
-    def _record_tags(self, record):
-        'Returns nonduplicate record tags'
+    def _record_tags(self, record, value):
+        '''Returns the nonduplicate tags for a value: its per-value override if
+        set, otherwise the record-level tags.'''
+        entry = self._value_metadata(record).get(
+            self._meta_value_key(getattr(value, 'data', value))
+        )
+        if entry is not None and 'tags' in entry:
+            return set(entry['tags'])
         return set(record.octodns.get('cloudflare', {}).get('tags', []))
+
+    def _metadata_signature(self, record):
+        '''Per-value (comment, tags) signature, used to detect metadata-only
+        changes that wouldn't otherwise alter the record's values.'''
+        signature = {}
+        for value in self._values_in_content_order(record):
+            key = self._meta_value_key(getattr(value, 'data', value))
+            signature[key] = (
+                self._record_comment(record, value),
+                tuple(sorted(self._record_tags(record, value))),
+            )
+        return signature
 
     def _record_region(self, record):
         'Returns the Cloudflare Regional Services region_key, or None'
@@ -1045,17 +1237,26 @@ class CloudflareProvider(BaseProvider):
                 yield content
         else:
             contents_for = getattr(self, f'_contents_for_{_type}')
-            for content in contents_for(record):
+            # _contents_for_<type>() yields one content per value in
+            # record.values order (single-value types yield one for
+            # record.value), so zipping lines each content up with its value
+            # for per-value comment/tags resolution. The contents are
+            # materialized (rather than zipped lazily) so the generator is
+            # fully drained even though zip stops on the values list.
+            values = self._values_in_content_order(record)
+            for value, content in zip(values, list(contents_for(record))):
                 content.update({'name': name, 'type': _type, 'ttl': ttl})
 
                 if _type in _PROXIABLE_RECORD_TYPES:
                     content.update({'proxied': self._record_is_proxied(record)})
 
-                if self._record_comment(record):
-                    content.update({'comment': self._record_comment(record)})
+                comment = self._record_comment(record, value)
+                if comment:
+                    content.update({'comment': comment})
 
-                if self._record_tags(record):
-                    content.update({'tags': list(self._record_tags(record))})
+                tags = self._record_tags(record, value)
+                if tags:
+                    content.update({'tags': list(tags)})
 
                 yield content
 
@@ -1548,13 +1749,16 @@ class CloudflareProvider(BaseProvider):
             ):
                 extra_changes.append(Update(existing_record, desired_record))
 
-            if self._record_comment(existing_record) != self._record_comment(
-                desired_record
-            ):
-                extra_changes.append(Update(existing_record, desired_record))
-
-            if self._record_tags(existing_record) != self._record_tags(
-                desired_record
+            # Metadata-only changes (comment/tags differing on a value that
+            # still exists on both sides). Values present on only one side are
+            # value changes, which core's diff already handles — comparing the
+            # full signature there would re-introduce changes _include_change
+            # intentionally filtered (e.g. unmanageable CDN records).
+            existing_sig = self._metadata_signature(existing_record)
+            desired_sig = self._metadata_signature(desired_record)
+            if any(
+                existing_sig[key] != desired_sig[key]
+                for key in existing_sig.keys() & desired_sig.keys()
             ):
                 extra_changes.append(Update(existing_record, desired_record))
 
