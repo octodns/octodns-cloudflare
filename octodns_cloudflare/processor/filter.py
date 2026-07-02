@@ -27,7 +27,16 @@ class _TagBaseFilter(_FilterProcessor):
 
     def _process(self, zone, *args, **kwargs):
         for record in zone.records:
-            tags = set(record.octodns.get('cloudflare', {}).get('tags', []))
+            cloudflare = record.octodns.get('cloudflare', {})
+            # A record's tags are the union of its record-level tags and any
+            # per-value tags (octodns.cloudflare.values). Filtering is
+            # record-granular, so a record is considered to carry a tag if any
+            # of its values do. Malformed entries are tolerated here and left
+            # for the provider to report at plan time.
+            tags = set(cloudflare.get('tags') or [])
+            for entry in cloudflare.get('values') or []:
+                if isinstance(entry, dict):
+                    tags.update(entry.get('tags') or [])
             if self._tags.issubset(tags):
                 self.matches(zone, record)
             else:
