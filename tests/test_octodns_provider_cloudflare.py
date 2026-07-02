@@ -3629,6 +3629,839 @@ class TestCloudflareProvider(TestCase):
             'a new comment',
         )
 
+    def test_per_value_metadata_populate_differing(self):
+        # multiple values, each Cloudflare object with its own comment/tags ->
+        # an explicit per-value list, no record-level shorthand
+        provider = CloudflareProvider('test', 'email', 'token')
+        provider.zone_records = Mock(
+            return_value=[
+                {
+                    'id': 'a1',
+                    'type': 'A',
+                    'name': 'multi.unit.tests',
+                    'content': '1.2.3.4',
+                    'comment': 'primary',
+                    'tags': ['cdn', 'tag1'],
+                    'ttl': 300,
+                },
+                {
+                    'id': 'a2',
+                    'type': 'A',
+                    'name': 'multi.unit.tests',
+                    'content': '1.2.3.5',
+                    'comment': 'failover',
+                    'tags': ['cdn', 'tag2'],
+                    'ttl': 300,
+                },
+            ]
+        )
+        zone = Zone('unit.tests.', [])
+        provider.populate(zone)
+        record = next(iter(zone.records))
+        cloudflare = record.octodns['cloudflare']
+        # differing -> per-value list and no record-level comment/tags
+        self.assertNotIn('comment', cloudflare)
+        self.assertNotIn('tags', cloudflare)
+        by_value = {e['value']: e for e in cloudflare['values']}
+        self.assertEqual(by_value['1.2.3.4']['comment'], 'primary')
+        self.assertEqual(by_value['1.2.3.4']['tags'], ['cdn', 'tag1'])
+        self.assertEqual(by_value['1.2.3.5']['comment'], 'failover')
+        self.assertEqual(by_value['1.2.3.5']['tags'], ['cdn', 'tag2'])
+
+    def test_per_value_metadata_populate_uniform(self):
+        # multiple values that all share the same metadata keep the
+        # record-level shorthand (backwards compatible, no per-value list)
+        provider = CloudflareProvider('test', 'email', 'token')
+        provider.zone_records = Mock(
+            return_value=[
+                {
+                    'id': 'a1',
+                    'type': 'A',
+                    'name': 'multi.unit.tests',
+                    'content': '1.2.3.4',
+                    'comment': 'same',
+                    'tags': ['t'],
+                    'ttl': 300,
+                },
+                {
+                    'id': 'a2',
+                    'type': 'A',
+                    'name': 'multi.unit.tests',
+                    'content': '1.2.3.5',
+                    'comment': 'same',
+                    'tags': ['t'],
+                    'ttl': 300,
+                },
+            ]
+        )
+        zone = Zone('unit.tests.', [])
+        provider.populate(zone)
+        cloudflare = next(iter(zone.records)).octodns['cloudflare']
+        self.assertEqual('same', cloudflare['comment'])
+        self.assertEqual(['t'], cloudflare['tags'])
+        self.assertNotIn('values', cloudflare)
+
+    def test_per_value_metadata_populate_partial(self):
+        # one value has metadata, the other none -> list carries only the one
+        # with metadata, no record-level default invented
+        provider = CloudflareProvider('test', 'email', 'token')
+        provider.zone_records = Mock(
+            return_value=[
+                {
+                    'id': 'a1',
+                    'type': 'A',
+                    'name': 'p.unit.tests',
+                    'content': '1.2.3.4',
+                    'comment': 'only',
+                    'ttl': 300,
+                },
+                {
+                    'id': 'a2',
+                    'type': 'A',
+                    'name': 'p.unit.tests',
+                    'content': '1.2.3.5',
+                    'ttl': 300,
+                },
+            ]
+        )
+        zone = Zone('unit.tests.', [])
+        provider.populate(zone)
+        record = next(iter(zone.records))
+        cloudflare = record.octodns['cloudflare']
+        self.assertNotIn('comment', cloudflare)
+        self.assertEqual(
+            ['1.2.3.4'], [e['value'] for e in cloudflare['values']]
+        )
+        self.assertEqual('only', cloudflare['values'][0]['comment'])
+        # the value without metadata gets nothing on the way back out
+        by_value = {d['content']: d for d in provider._gen_data(record)}
+        self.assertNotIn('comment', by_value['1.2.3.5'])
+        self.assertNotIn('tags', by_value['1.2.3.5'])
+        self.assertEqual('only', by_value['1.2.3.4']['comment'])
+
+    def test_per_value_metadata_gen_data_overrides(self):
+        # record-level default + sparse per-value overrides, resolved per field
+        provider = CloudflareProvider('test', 'email', 'token')
+        zone = Zone('unit.tests.', [])
+        record = Record.new(
+            zone,
+            'multi',
+            {
+                'ttl': 300,
+                'type': 'A',
+                'values': ['1.2.3.4', '1.2.3.5', '1.2.3.6'],
+                'octodns': {
+                    'cloudflare': {
+                        'comment': 'default-c',
+                        'tags': ['default-t'],
+                        'values': [
+                            {
+                                'value': '1.2.3.4',
+                                'comment': 'c4',
+                                'tags': ['t4'],
+                            },
+                            # only tags -> comment falls back to record-level
+                            {'value': '1.2.3.5', 'tags': ['t5']},
+                        ],
+                    }
+                },
+            },
+        )
+        by_value = {d['content']: d for d in provider._gen_data(record)}
+        # fully overridden
+        self.assertEqual('c4', by_value['1.2.3.4']['comment'])
+        self.assertEqual(['t4'], by_value['1.2.3.4']['tags'])
+        # tags overridden, comment inherits record-level default
+        self.assertEqual('default-c', by_value['1.2.3.5']['comment'])
+        self.assertEqual(['t5'], by_value['1.2.3.5']['tags'])
+        # no entry -> record-level default for both
+        self.assertEqual('default-c', by_value['1.2.3.6']['comment'])
+        self.assertEqual(['default-t'], by_value['1.2.3.6']['tags'])
+
+    def test_record_level_metadata_applies_to_all_values(self):
+        # backwards compat: record-level comment/tags with no per-value list
+        # apply to every value
+        provider = CloudflareProvider('test', 'email', 'token')
+        zone = Zone('unit.tests.', [])
+        record = Record.new(
+            zone,
+            'multi',
+            {
+                'ttl': 300,
+                'type': 'A',
+                'values': ['1.2.3.4', '1.2.3.5'],
+                'octodns': {'cloudflare': {'comment': 'shared', 'tags': ['t']}},
+            },
+        )
+        for content in provider._gen_data(record):
+            self.assertEqual('shared', content['comment'])
+            self.assertEqual(['t'], content['tags'])
+
+    def test_per_value_metadata_round_trip(self):
+        # dump then re-emit reproduces each value's comment/tags
+        provider = CloudflareProvider('test', 'email', 'token')
+        provider.zone_records = Mock(
+            return_value=[
+                {
+                    'id': 'a1',
+                    'type': 'A',
+                    'name': 'multi.unit.tests',
+                    'content': '1.2.3.4',
+                    'comment': 'primary',
+                    'tags': ['tag1'],
+                    'ttl': 300,
+                },
+                {
+                    'id': 'a2',
+                    'type': 'A',
+                    'name': 'multi.unit.tests',
+                    'content': '1.2.3.5',
+                    'comment': 'failover',
+                    'tags': ['tag2'],
+                    'ttl': 300,
+                },
+            ]
+        )
+        zone = Zone('unit.tests.', [])
+        provider.populate(zone)
+        record = next(iter(zone.records))
+        by_value = {d['content']: d for d in provider._gen_data(record)}
+        self.assertEqual('primary', by_value['1.2.3.4']['comment'])
+        self.assertEqual(['tag1'], by_value['1.2.3.4']['tags'])
+        self.assertEqual('failover', by_value['1.2.3.5']['comment'])
+        self.assertEqual(['tag2'], by_value['1.2.3.5']['tags'])
+
+    def test_per_value_metadata_extra_changes(self):
+        # a metadata-only change on one value yields exactly one Update;
+        # identical metadata yields none
+        provider = CloudflareProvider('test', 'email', 'token')
+
+        def records(comment_4):
+            return [
+                {
+                    'id': 'a1',
+                    'type': 'A',
+                    'name': 'multi.unit.tests',
+                    'content': '1.2.3.4',
+                    'comment': comment_4,
+                    'ttl': 300,
+                },
+                {
+                    'id': 'a2',
+                    'type': 'A',
+                    'name': 'multi.unit.tests',
+                    'content': '1.2.3.5',
+                    'comment': 'failover',
+                    'ttl': 300,
+                },
+            ]
+
+        provider.zone_records = Mock(return_value=records('primary'))
+        existing = Zone('unit.tests.', [])
+        provider.populate(existing)
+
+        provider.zone_records = Mock(return_value=records('primary-changed'))
+        desired = Zone('unit.tests.', [])
+        provider.populate(desired)
+        changes = existing.changes(desired, provider)
+        extra = provider._extra_changes(existing, desired, changes)
+        self.assertEqual(1, len(extra))
+
+        # no metadata change -> no extra change
+        provider.zone_records = Mock(return_value=records('primary'))
+        same = Zone('unit.tests.', [])
+        provider.populate(same)
+        self.assertEqual(
+            0,
+            len(
+                provider._extra_changes(
+                    existing, same, existing.changes(same, provider)
+                )
+            ),
+        )
+
+    @patch('octodns_cloudflare.BaseProvider._process_desired_zone')
+    def test_per_value_metadata_validation(self, mock_base):
+        mock_base.side_effect = lambda desired: desired
+        zone = Zone('unit.tests.', [])
+
+        def make_desired():
+            desired = zone.copy()
+            desired.add_record(
+                Record.new(
+                    zone,
+                    'multi',
+                    {
+                        'ttl': 300,
+                        'type': 'A',
+                        'values': ['1.2.3.4', '1.2.3.5'],
+                        'octodns': {
+                            'cloudflare': {
+                                'values': [
+                                    {'value': '9.9.9.9', 'comment': 'orphan'}
+                                ]
+                            }
+                        },
+                    },
+                )
+            )
+            return desired
+
+        # strict -> a value not on the record is a plan-time error
+        provider = CloudflareProvider(
+            'test', 'email', 'token', strict_supports=True
+        )
+        with self.assertRaises(SupportsException) as ctx:
+            provider._process_desired_zone(make_desired())
+        self.assertIn('not one of the', str(ctx.exception))
+        self.assertIn('9.9.9.9', str(ctx.exception))
+
+        # non-strict -> warn and pass through
+        provider = CloudflareProvider(
+            'test', 'email', 'token', strict_supports=False
+        )
+        result = provider._process_desired_zone(make_desired())
+        self.assertEqual(1, len(result.records))
+
+        # an entry that references a real value passes validation cleanly,
+        # even in strict mode
+        provider = CloudflareProvider(
+            'test', 'email', 'token', strict_supports=True
+        )
+        valid = zone.copy()
+        valid.add_record(
+            Record.new(
+                zone,
+                'multi',
+                {
+                    'ttl': 300,
+                    'type': 'A',
+                    'values': ['1.2.3.4', '1.2.3.5'],
+                    'octodns': {
+                        'cloudflare': {
+                            'values': [{'value': '1.2.3.4', 'comment': 'ok'}]
+                        }
+                    },
+                },
+            )
+        )
+        result = provider._process_desired_zone(valid)
+        self.assertEqual(1, len(result.records))
+
+    @patch('octodns_cloudflare.BaseProvider._process_desired_zone')
+    def test_per_value_metadata_malformed(self, mock_base):
+        mock_base.side_effect = lambda desired: desired
+        zone = Zone('unit.tests.', [])
+
+        def desired_with(values):
+            desired = zone.copy()
+            desired.add_record(
+                Record.new(
+                    zone,
+                    'm',
+                    {
+                        'ttl': 300,
+                        'type': 'A',
+                        'values': ['1.2.3.4', '1.2.3.5'],
+                        'octodns': {'cloudflare': {'values': values}},
+                    },
+                    lenient=True,
+                )
+            )
+            return desired
+
+        provider = CloudflareProvider(
+            'test', 'email', 'token', strict_supports=True
+        )
+        # values is not a list
+        with self.assertRaises(SupportsException) as ctx:
+            provider._process_desired_zone(
+                desired_with({'1.2.3.4': {'comment': 'x'}})
+            )
+        self.assertIn('must be a list', str(ctx.exception))
+        # an entry that is not a mapping
+        with self.assertRaises(SupportsException) as ctx:
+            provider._process_desired_zone(desired_with(['oops']))
+        self.assertIn('must be a mapping', str(ctx.exception))
+        # a mapping entry missing its 'value' key
+        with self.assertRaises(SupportsException) as ctx:
+            provider._process_desired_zone(
+                desired_with([{'comment': 'no value'}])
+            )
+        self.assertIn('must be a mapping', str(ctx.exception))
+
+        # non-strict: malformed config warns and degrades rather than crashing
+        provider = CloudflareProvider(
+            'test', 'email', 'token', strict_supports=False
+        )
+        result = provider._process_desired_zone(
+            desired_with(['oops', {'value': '1.2.3.4', 'comment': 'ok'}])
+        )
+        self.assertEqual(1, len(result.records))
+        # the bad entry is skipped; the good one still applies
+        rec = next(iter(result.records))
+        by_value = {d['content']: d for d in provider._gen_data(rec)}
+        self.assertEqual('ok', by_value['1.2.3.4']['comment'])
+        self.assertNotIn('comment', by_value['1.2.3.5'])
+
+        # non-strict + a non-list values warns and passes the record through
+        result = provider._process_desired_zone(
+            desired_with({'1.2.3.4': {'comment': 'x'}})
+        )
+        self.assertEqual(1, len(result.records))
+
+        # a non-list values is ignored entirely by _gen_data, which falls back
+        # to the record-level comment
+        rec2 = Record.new(
+            zone,
+            'm2',
+            {
+                'ttl': 300,
+                'type': 'A',
+                'value': '9.9.9.9',
+                'octodns': {
+                    'cloudflare': {
+                        'comment': 'record-level',
+                        'values': {'9.9.9.9': {'comment': 'ignored'}},
+                    }
+                },
+            },
+            lenient=True,
+        )
+        self.assertEqual(
+            'record-level', next(provider._gen_data(rec2))['comment']
+        )
+
+    def test_per_value_metadata_duplicate_value_warns(self):
+        # two Cloudflare objects sharing a value but differing in metadata
+        # can't be represented per-value -> keep the first and warn
+        provider = CloudflareProvider('test', 'email', 'token')
+        zone = Zone('unit.tests.', [])
+        records = [
+            {
+                'id': 'a1',
+                'type': 'A',
+                'name': 'dup.unit.tests',
+                'content': '1.2.3.4',
+                'comment': 'first',
+                'ttl': 300,
+            },
+            {
+                'id': 'a2',
+                'type': 'A',
+                'name': 'dup.unit.tests',
+                'content': '1.2.3.4',
+                'comment': 'second',
+                'ttl': 300,
+            },
+        ]
+        with self.assertLogs(provider.log, level='WARNING') as cm:
+            record = provider._record_for(zone, 'dup', 'A', records, True)
+        self.assertTrue(any('duplicate values' in line for line in cm.output))
+        self.assertEqual('first', record.octodns['cloudflare']['comment'])
+
+    def test_per_value_metadata_duplicate_value_identical(self):
+        # duplicate value carrying identical metadata is deduped silently and
+        # collapses to the record-level shorthand (no warning, no list)
+        provider = CloudflareProvider('test', 'email', 'token')
+        zone = Zone('unit.tests.', [])
+        records = [
+            {
+                'id': 'a1',
+                'type': 'A',
+                'name': 'dup.unit.tests',
+                'content': '1.2.3.4',
+                'comment': 'same',
+                'tags': ['t'],
+                'ttl': 300,
+            },
+            {
+                'id': 'a2',
+                'type': 'A',
+                'name': 'dup.unit.tests',
+                'content': '1.2.3.4',
+                'comment': 'same',
+                'tags': ['t'],
+                'ttl': 300,
+            },
+        ]
+        record = provider._record_for(zone, 'dup', 'A', records, True)
+        cloudflare = record.octodns['cloudflare']
+        self.assertEqual('same', cloudflare['comment'])
+        self.assertEqual(['t'], cloudflare['tags'])
+        self.assertNotIn('values', cloudflare)
+
+    def test_per_value_metadata_tags_only_entry(self):
+        # differing values where one carries only tags and the other only a
+        # comment -> each emitted entry omits the field it lacks
+        provider = CloudflareProvider('test', 'email', 'token')
+        provider.zone_records = Mock(
+            return_value=[
+                {
+                    'id': 'a1',
+                    'type': 'A',
+                    'name': 'm.unit.tests',
+                    'content': '1.2.3.4',
+                    'tags': ['t4'],
+                    'ttl': 300,
+                },
+                {
+                    'id': 'a2',
+                    'type': 'A',
+                    'name': 'm.unit.tests',
+                    'content': '1.2.3.5',
+                    'comment': 'c5',
+                    'ttl': 300,
+                },
+            ]
+        )
+        zone = Zone('unit.tests.', [])
+        provider.populate(zone)
+        by_value = {
+            e['value']: e
+            for e in next(iter(zone.records)).octodns['cloudflare']['values']
+        }
+        self.assertEqual(['t4'], by_value['1.2.3.4']['tags'])
+        self.assertNotIn('comment', by_value['1.2.3.4'])
+        self.assertEqual('c5', by_value['1.2.3.5']['comment'])
+        self.assertNotIn('tags', by_value['1.2.3.5'])
+
+    def test_cdn_comment_tags(self):
+        # CDN rewrites collapse to a single synthetic CNAME and keep the
+        # record-level comment/tags shorthand (no per-value list)
+        provider = CloudflareProvider(
+            'test', 'email', 'token', 'account_id', True
+        )
+        provider.zone_records = Mock(
+            return_value=[
+                {
+                    'id': 'c1',
+                    'type': 'A',
+                    'name': 'a.unit.tests',
+                    'content': '1.1.1.1',
+                    'proxiable': True,
+                    'proxied': True,
+                    'comment': 'cdn comment',
+                    'tags': ['cdn-tag'],
+                    'ttl': 300,
+                }
+            ]
+        )
+        zone = Zone('unit.tests.', [])
+        provider.populate(zone)
+        cloudflare = next(iter(zone.records)).octodns['cloudflare']
+        self.assertEqual('cdn comment', cloudflare['comment'])
+        self.assertEqual(['cdn-tag'], cloudflare['tags'])
+        self.assertNotIn('values', cloudflare)
+
+    def test_per_value_metadata_mx(self):
+        # structured-value type round-trips per-value metadata
+        provider = CloudflareProvider('test', 'email', 'token')
+        provider.zone_records = Mock(
+            return_value=[
+                {
+                    'id': 'm1',
+                    'type': 'MX',
+                    'name': 'unit.tests',
+                    'content': 'mx1.unit.tests',
+                    'priority': 10,
+                    'comment': 'primary',
+                    'ttl': 300,
+                },
+                {
+                    'id': 'm2',
+                    'type': 'MX',
+                    'name': 'unit.tests',
+                    'content': 'mx2.unit.tests',
+                    'priority': 20,
+                    'comment': 'backup',
+                    'ttl': 300,
+                },
+            ]
+        )
+        zone = Zone('unit.tests.', [])
+        provider.populate(zone)
+        record = next(iter(zone.records))
+        by_value = {
+            (e['value']['preference'], e['value']['exchange']): e
+            for e in record.octodns['cloudflare']['values']
+        }
+        self.assertEqual(
+            'primary', by_value[(10, 'mx1.unit.tests.')]['comment']
+        )
+        self.assertEqual('backup', by_value[(20, 'mx2.unit.tests.')]['comment'])
+        # and it survives the trip back out to Cloudflare contents
+        contents = {
+            (d['priority'], d['content']): d for d in provider._gen_data(record)
+        }
+        self.assertEqual(
+            'primary', contents[(10, 'mx1.unit.tests.')]['comment']
+        )
+        self.assertEqual('backup', contents[(20, 'mx2.unit.tests.')]['comment'])
+
+    def test_per_value_metadata_structured_round_trip(self):
+        # every structured-value type ross called out (CAA/SRV/LOC/NAPTR) must
+        # round-trip per-value metadata: the value-key stored on read has to
+        # match the value-key looked up on write even though the value is a
+        # multi-field dict rather than a scalar
+        provider = CloudflareProvider('test', 'email', 'token')
+        cases = {
+            'CAA': (
+                'ca',
+                [
+                    {
+                        'type': 'CAA',
+                        'name': 'ca.unit.tests',
+                        'data': {'flags': 0, 'tag': 'issue', 'value': 'le.org'},
+                        'ttl': 300,
+                        'comment': 'A',
+                    },
+                    {
+                        'type': 'CAA',
+                        'name': 'ca.unit.tests',
+                        'data': {
+                            'flags': 0,
+                            'tag': 'issuewild',
+                            'value': 'ca2.org',
+                        },
+                        'ttl': 300,
+                        'comment': 'B',
+                    },
+                ],
+            ),
+            'SRV': (
+                '_sip._tcp',
+                [
+                    {
+                        'type': 'SRV',
+                        'name': '_sip._tcp.unit.tests',
+                        'data': {
+                            'priority': 10,
+                            'weight': 20,
+                            'port': 5060,
+                            'target': 'sip1.unit.tests',
+                        },
+                        'ttl': 300,
+                        'comment': 'A',
+                    },
+                    {
+                        'type': 'SRV',
+                        'name': '_sip._tcp.unit.tests',
+                        'data': {
+                            'priority': 20,
+                            'weight': 20,
+                            'port': 5061,
+                            'target': 'sip2.unit.tests',
+                        },
+                        'ttl': 300,
+                        'comment': 'B',
+                    },
+                ],
+            ),
+            'NAPTR': (
+                'naptr',
+                [
+                    {
+                        'type': 'NAPTR',
+                        'name': 'naptr.unit.tests',
+                        'data': {
+                            'flags': 'U',
+                            'order': 100,
+                            'preference': 10,
+                            'regex': '!^.*$!sip:a@b.example.com!',
+                            'replacement': '.',
+                            'service': 'SIP+D2U',
+                        },
+                        'ttl': 300,
+                        'comment': 'A',
+                    },
+                    {
+                        'type': 'NAPTR',
+                        'name': 'naptr.unit.tests',
+                        'data': {
+                            'flags': 'U',
+                            'order': 100,
+                            'preference': 20,
+                            'regex': '!^.*$!sip:c@d.example.com!',
+                            'replacement': '.',
+                            'service': 'SIP+D2T',
+                        },
+                        'ttl': 300,
+                        'comment': 'B',
+                    },
+                ],
+            ),
+        }
+        for _type, (name, records) in cases.items():
+            zone = Zone('unit.tests.', [])
+            record = provider._record_for(zone, name, _type, records, True)
+            # differing per-value metadata -> an explicit per-value list
+            self.assertIn('values', record.octodns['cloudflare'])
+            # every value's comment survives the trip back out to Cloudflare
+            comments = sorted(
+                d.get('comment') for d in provider._gen_data(record)
+            )
+            self.assertEqual(
+                ['A', 'B'], comments, f'{_type} per-value metadata lost'
+            )
+
+    @patch('octodns_cloudflare.BaseProvider._process_desired_zone')
+    def test_per_value_metadata_non_canonical_values(self, mock_base):
+        # a hand-authored entry value in an equivalent-but-different spelling
+        # (mixed-case hostname, uncompressed IPv6) is normalized through the
+        # record's value type, so it still matches its record value
+        mock_base.side_effect = lambda desired: desired
+        provider = CloudflareProvider(
+            'test', 'email', 'token', strict_supports=True
+        )
+        zone = Zone('unit.tests.', [])
+
+        mx = Record.new(
+            zone,
+            'mx',
+            {
+                'ttl': 300,
+                'type': 'MX',
+                'values': [
+                    {'preference': 10, 'exchange': 'mx1.unit.tests.'},
+                    {'preference': 20, 'exchange': 'mx2.unit.tests.'},
+                ],
+                'octodns': {
+                    'cloudflare': {
+                        'values': [
+                            {
+                                # mixed-case spelling of mx1.unit.tests.
+                                'value': {
+                                    'preference': 10,
+                                    'exchange': 'MX1.Unit.Tests.',
+                                },
+                                'comment': 'primary',
+                            }
+                        ]
+                    }
+                },
+            },
+        )
+        aaaa = Record.new(
+            zone,
+            'v6',
+            {
+                'ttl': 300,
+                'type': 'AAAA',
+                'values': ['2001:db8::1', '2001:db8::2'],
+                'octodns': {
+                    'cloudflare': {
+                        'values': [
+                            {
+                                # uncompressed, uppercase spelling
+                                'value': '2001:0DB8:0000:0000:0000:0000:0000:0001',
+                                'comment': 'uncompressed',
+                            }
+                        ]
+                    }
+                },
+            },
+        )
+
+        # matching works on the write path
+        mx_contents = {
+            d['priority']: d.get('comment') for d in provider._gen_data(mx)
+        }
+        self.assertEqual('primary', mx_contents[10])
+        self.assertIsNone(mx_contents[20])
+        aaaa_contents = {
+            d['content']: d.get('comment') for d in provider._gen_data(aaaa)
+        }
+        self.assertEqual('uncompressed', aaaa_contents['2001:db8::1'])
+        self.assertIsNone(aaaa_contents['2001:db8::2'])
+
+        # and strict plan-time validation accepts the equivalent spellings
+        desired = zone.copy()
+        desired.add_record(mx)
+        desired.add_record(aaaa)
+        result = provider._process_desired_zone(desired)
+        self.assertEqual(2, len(result.records))
+
+    @patch('octodns_cloudflare.BaseProvider._process_desired_zone')
+    def test_per_value_metadata_unparseable_value(self, mock_base):
+        # an entry value the record's value type can't parse (here an MX
+        # missing its exchange) must not crash; it falls back to its raw form,
+        # matches nothing, and is reported at plan time
+        mock_base.side_effect = lambda desired: desired
+        zone = Zone('unit.tests.', [])
+        record = Record.new(
+            zone,
+            'mx',
+            {
+                'ttl': 300,
+                'type': 'MX',
+                'values': [{'preference': 10, 'exchange': 'mx1.unit.tests.'}],
+                'octodns': {
+                    'cloudflare': {
+                        'comment': 'record-level',
+                        'values': [
+                            {'value': {'preference': 10}, 'comment': 'nope'}
+                        ],
+                    }
+                },
+            },
+            lenient=True,
+        )
+
+        # write path degrades to the record-level comment
+        provider = CloudflareProvider(
+            'test', 'email', 'token', strict_supports=False
+        )
+        contents = list(provider._gen_data(record))
+        self.assertEqual('record-level', contents[0]['comment'])
+
+        # strict plan-time validation reports it as unmatched
+        provider = CloudflareProvider(
+            'test', 'email', 'token', strict_supports=True
+        )
+        desired = zone.copy()
+        desired.add_record(record)
+        with self.assertRaises(SupportsException) as ctx:
+            provider._process_desired_zone(desired)
+        self.assertIn('not one of the', str(ctx.exception))
+
+    def test_per_value_metadata_txt(self):
+        # TXT (chunked content path) round-trips per-value metadata
+        provider = CloudflareProvider('test', 'email', 'token')
+        provider.zone_records = Mock(
+            return_value=[
+                {
+                    'id': 't1',
+                    'type': 'TXT',
+                    'name': 'txt.unit.tests',
+                    'content': 'verification=abc',
+                    'comment': 'search',
+                    'ttl': 300,
+                },
+                {
+                    'id': 't2',
+                    'type': 'TXT',
+                    'name': 'txt.unit.tests',
+                    'content': 'v=spf1 ~all',
+                    'comment': 'spf',
+                    'ttl': 300,
+                },
+            ]
+        )
+        zone = Zone('unit.tests.', [])
+        provider.populate(zone)
+        record = next(iter(zone.records))
+        by_value = {
+            e['value']: e for e in record.octodns['cloudflare']['values']
+        }
+        self.assertEqual('search', by_value['verification=abc']['comment'])
+        self.assertEqual('spf', by_value['v=spf1 ~all']['comment'])
+        # Cloudflare TXT content is quoted; the per-value comment still lines
+        # up with the right (chunked) content
+        contents = {d['content']: d for d in provider._gen_data(record)}
+        self.assertEqual('search', contents['"verification=abc"']['comment'])
+        self.assertEqual('spf', contents['"v=spf1 ~all"']['comment'])
+
     def test_change_keyer(self):
         provider = CloudflareProvider('test', 'email', 'token')
 
