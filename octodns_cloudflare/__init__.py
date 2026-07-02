@@ -836,7 +836,7 @@ class CloudflareProvider(BaseProvider):
                         msg, 'ignoring the malformed entry'
                     )
                     continue
-                if self._meta_value_key(entry['value']) not in actual:
+                if self._entry_value_key(record, entry['value']) not in actual:
                     msg = (
                         f'{record.fqdn} {record._type}: octodns.cloudflare '
                         f'per-value metadata references value '
@@ -1093,16 +1093,35 @@ class CloudflareProvider(BaseProvider):
         comment, tags = meta
         return (comment, frozenset(tags))
 
+    def _entry_value_key(self, record, value):
+        '''Key for a per-value entry's raw (YAML-authored) value, normalized
+        through the record's value type so equivalent spellings — mixed-case
+        hostnames, uncompressed IPv6, idna forms — match the record's (already
+        normalized) values. record._value_type is technically private octoDNS
+        API, but it's been stable for years, there's no clean public
+        alternative, and this suite runs against octoDNS core PRs so drift
+        would surface early. Values the type can't parse fall back to their
+        raw form — they won't match anything and _validate_value_metadata
+        reports them at plan time.'''
+        try:
+            normalized = record._value_type(value)
+        except Exception:
+            return self._meta_value_key(value)
+        return self._meta_value_key(getattr(normalized, 'data', normalized))
+
     def _value_metadata(self, record):
         '''Per-value metadata entries (octodns.cloudflare.values) keyed by
-        value. Empty when the record uses the record-level shorthand.
-        Tolerant of malformed config (which _validate_value_metadata reports
-        at plan time) so a lenient run degrades rather than crashing.'''
+        normalized value. Empty when the record uses the record-level
+        shorthand. Tolerant of malformed config (which
+        _validate_value_metadata reports at plan time) so a lenient run
+        degrades rather than crashing. Callers that resolve metadata for more
+        than one value should call this once and pass the map to
+        _record_comment/_record_tags.'''
         entries = record.octodns.get('cloudflare', {}).get('values')
         if not isinstance(entries, list):
             return {}
         return {
-            self._meta_value_key(entry.get('value')): entry
+            self._entry_value_key(record, entry['value']): entry
             for entry in entries
             if isinstance(entry, dict) and 'value' in entry
         }
@@ -1180,20 +1199,22 @@ class CloudflareProvider(BaseProvider):
             values_meta.append(entry)
         cloudflare['values'] = values_meta
 
-    def _record_comment(self, record, value):
+    def _record_comment(self, record, value, value_metadata):
         '''Returns the comment for a value: its per-value override if set,
-        otherwise the record-level comment.'''
-        entry = self._value_metadata(record).get(
+        otherwise the record-level comment. value_metadata is the record's
+        _value_metadata map, built once by the caller.'''
+        entry = value_metadata.get(
             self._meta_value_key(getattr(value, 'data', value))
         )
         if entry is not None and 'comment' in entry:
             return entry['comment']
         return record.octodns.get('cloudflare', {}).get('comment', '')
 
-    def _record_tags(self, record, value):
+    def _record_tags(self, record, value, value_metadata):
         '''Returns the nonduplicate tags for a value: its per-value override if
-        set, otherwise the record-level tags.'''
-        entry = self._value_metadata(record).get(
+        set, otherwise the record-level tags. value_metadata is the record's
+        _value_metadata map, built once by the caller.'''
+        entry = value_metadata.get(
             self._meta_value_key(getattr(value, 'data', value))
         )
         if entry is not None and 'tags' in entry:
@@ -1203,12 +1224,13 @@ class CloudflareProvider(BaseProvider):
     def _metadata_signature(self, record):
         '''Per-value (comment, tags) signature, used to detect metadata-only
         changes that wouldn't otherwise alter the record's values.'''
+        value_metadata = self._value_metadata(record)
         signature = {}
         for value in self._values_in_content_order(record):
             key = self._meta_value_key(getattr(value, 'data', value))
             signature[key] = (
-                self._record_comment(record, value),
-                tuple(sorted(self._record_tags(record, value))),
+                self._record_comment(record, value, value_metadata),
+                tuple(sorted(self._record_tags(record, value, value_metadata))),
             )
         return signature
 
@@ -1244,17 +1266,18 @@ class CloudflareProvider(BaseProvider):
             # materialized (rather than zipped lazily) so the generator is
             # fully drained even though zip stops on the values list.
             values = self._values_in_content_order(record)
+            value_metadata = self._value_metadata(record)
             for value, content in zip(values, list(contents_for(record))):
                 content.update({'name': name, 'type': _type, 'ttl': ttl})
 
                 if _type in _PROXIABLE_RECORD_TYPES:
                     content.update({'proxied': self._record_is_proxied(record)})
 
-                comment = self._record_comment(record, value)
+                comment = self._record_comment(record, value, value_metadata)
                 if comment:
                     content.update({'comment': comment})
 
-                tags = self._record_tags(record, value)
+                tags = self._record_tags(record, value, value_metadata)
                 if tags:
                     content.update({'tags': list(tags)})
 

@@ -4305,6 +4305,126 @@ class TestCloudflareProvider(TestCase):
                 ['A', 'B'], comments, f'{_type} per-value metadata lost'
             )
 
+    @patch('octodns_cloudflare.BaseProvider._process_desired_zone')
+    def test_per_value_metadata_non_canonical_values(self, mock_base):
+        # a hand-authored entry value in an equivalent-but-different spelling
+        # (mixed-case hostname, uncompressed IPv6) is normalized through the
+        # record's value type, so it still matches its record value
+        mock_base.side_effect = lambda desired: desired
+        provider = CloudflareProvider(
+            'test', 'email', 'token', strict_supports=True
+        )
+        zone = Zone('unit.tests.', [])
+
+        mx = Record.new(
+            zone,
+            'mx',
+            {
+                'ttl': 300,
+                'type': 'MX',
+                'values': [
+                    {'preference': 10, 'exchange': 'mx1.unit.tests.'},
+                    {'preference': 20, 'exchange': 'mx2.unit.tests.'},
+                ],
+                'octodns': {
+                    'cloudflare': {
+                        'values': [
+                            {
+                                # mixed-case spelling of mx1.unit.tests.
+                                'value': {
+                                    'preference': 10,
+                                    'exchange': 'MX1.Unit.Tests.',
+                                },
+                                'comment': 'primary',
+                            }
+                        ]
+                    }
+                },
+            },
+        )
+        aaaa = Record.new(
+            zone,
+            'v6',
+            {
+                'ttl': 300,
+                'type': 'AAAA',
+                'values': ['2001:db8::1', '2001:db8::2'],
+                'octodns': {
+                    'cloudflare': {
+                        'values': [
+                            {
+                                # uncompressed, uppercase spelling
+                                'value': '2001:0DB8:0000:0000:0000:0000:0000:0001',
+                                'comment': 'uncompressed',
+                            }
+                        ]
+                    }
+                },
+            },
+        )
+
+        # matching works on the write path
+        mx_contents = {
+            d['priority']: d.get('comment') for d in provider._gen_data(mx)
+        }
+        self.assertEqual('primary', mx_contents[10])
+        self.assertIsNone(mx_contents[20])
+        aaaa_contents = {
+            d['content']: d.get('comment') for d in provider._gen_data(aaaa)
+        }
+        self.assertEqual('uncompressed', aaaa_contents['2001:db8::1'])
+        self.assertIsNone(aaaa_contents['2001:db8::2'])
+
+        # and strict plan-time validation accepts the equivalent spellings
+        desired = zone.copy()
+        desired.add_record(mx)
+        desired.add_record(aaaa)
+        result = provider._process_desired_zone(desired)
+        self.assertEqual(2, len(result.records))
+
+    @patch('octodns_cloudflare.BaseProvider._process_desired_zone')
+    def test_per_value_metadata_unparseable_value(self, mock_base):
+        # an entry value the record's value type can't parse (here an MX
+        # missing its exchange) must not crash; it falls back to its raw form,
+        # matches nothing, and is reported at plan time
+        mock_base.side_effect = lambda desired: desired
+        zone = Zone('unit.tests.', [])
+        record = Record.new(
+            zone,
+            'mx',
+            {
+                'ttl': 300,
+                'type': 'MX',
+                'values': [{'preference': 10, 'exchange': 'mx1.unit.tests.'}],
+                'octodns': {
+                    'cloudflare': {
+                        'comment': 'record-level',
+                        'values': [
+                            {'value': {'preference': 10}, 'comment': 'nope'}
+                        ],
+                    }
+                },
+            },
+            lenient=True,
+        )
+
+        # write path degrades to the record-level comment
+        provider = CloudflareProvider(
+            'test', 'email', 'token', strict_supports=False
+        )
+        contents = list(provider._gen_data(record))
+        self.assertEqual('record-level', contents[0]['comment'])
+
+        # strict plan-time validation reports it as unmatched
+        provider = CloudflareProvider(
+            'test', 'email', 'token', strict_supports=True
+        )
+        desired = zone.copy()
+        desired.add_record(record)
+        with self.assertRaises(SupportsException) as ctx:
+            provider._process_desired_zone(desired)
+        self.assertIn('not one of the', str(ctx.exception))
+
     def test_per_value_metadata_txt(self):
         # TXT (chunked content path) round-trips per-value metadata
         provider = CloudflareProvider('test', 'email', 'token')

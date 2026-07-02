@@ -205,7 +205,7 @@ A value's entry is a clean override: a `comment`/`tags` it specifies replaces th
         exchange: mx2.example.com.
 ```
 
-A per-value entry whose `value` does not match any of the record's values is reported at plan time (raised under `strict_supports`, otherwise warned), as is a malformed `values` list. Cloudflare can hold two objects with the same value but different metadata, which can't be represented per-value; in that case the first is kept and a warning is logged on dump.
+A per-value entry whose `value` does not match any of the record's values is reported at plan time (raised under `strict_supports`, otherwise warned), as is a malformed `values` list. Cloudflare can hold two objects with the same value but different metadata, which can't be represented per-value; the first is kept and a warning is logged on dump, and the same limitation applies on apply — the provider matches Cloudflare objects by value, so duplicate objects can't be individually managed and one may be left untouched.
 
 The `TagAllowListFilter`/`TagRejectListFilter` [processors](#processors) consider a record's per-value tags as well as its record-level tags — a record is treated as carrying a tag if any of its values do.
 
