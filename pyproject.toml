@@ -1,5 +1,76 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "octodns-cloudflare"
+description = "Cloudflare provider for octoDNS"
+authors = [{name = "Ross McFarland", email = "rwmcfa1@gmail.com"}]
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+dynamic = ["version"]
+keywords = ["dns", "octodns", "dns-as-code"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: OS Independent",
+    "Topic :: Internet :: Name Service (DNS)",
+    "Topic :: System :: Systems Administration",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+    "octodns>=1.5.0",
+    "requests>=2.27.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/octodns/octodns-cloudflare"
+Source = "https://github.com/octodns/octodns-cloudflare"
+Issues = "https://github.com/octodns/octodns-cloudflare/issues"
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-cov",
+    "pytest-network",
+    "requests_mock",
+]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "pytest-network",
+    "requests_mock",
+    # we need to manually/explicitely bump major versions as they're
+    # likely to result in formatting changes that should happen in their
+    # own PR. This will basically happen yearly
+    # https://black.readthedocs.io/en/stable/the_black_code_style/index.html#stability-policy
+    "black>=26.0.0,<27.0.0",
+    "build>=0.7.0",
+    "changelet",
+    "isort>=5.11.5",
+    "proviso",
+    "pyflakes>=2.2.0",
+    "readme_renderer[md]>=26.0",
+    "twine>=3.4.2",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "octodns_cloudflare.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["octodns_cloudflare*"]
+
 [tool.black]
 line-length=80
+target-version = ["py310", "py311", "py312", "py313", "py314"]
 skip-string-normalization=true
 skip-magic-trailing-comma=true
 
