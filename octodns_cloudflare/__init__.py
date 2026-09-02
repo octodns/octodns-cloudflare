@@ -535,6 +535,26 @@ class CloudflareProvider(BaseProvider):
                 )
                 if r['type'] in self.SUPPORTS
             ]
+            # With Multi-provider DNS enabled, /dns_records can contain the apex NS records
+            # for the additional providers while omitting CF's own nameservers.
+            # We therefore need to add CF's NS records back in for the apex if they are missing.
+            cf_name_servers = self.zones[zone.name].get('name_servers', [])
+            if cf_name_servers:
+                apex_ns = [
+                    r
+                    for r in records
+                    if r['type'] == 'NS'
+                    and zone.hostname_from_fqdn(r['name']) == ''
+                ]
+                if apex_ns:
+                    existing = {r['content'] for r in apex_ns}
+                    template = apex_ns[0]
+                    for ns in cf_name_servers:
+                        if ns not in existing:
+                            record = template.copy()
+                            record['content'] = ns
+                            records.append(record)
+                            existing.add(ns)
             if self.pagerules:
                 path = f'/zones/{zone_id}/pagerules'
                 resp = self._try_request(
@@ -1267,7 +1287,22 @@ class CloudflareProvider(BaseProvider):
             # fully drained even though zip stops on the values list.
             values = self._values_in_content_order(record)
             value_metadata = self._value_metadata(record)
-            for value, content in zip(values, list(contents_for(record))):
+            contents = list(contents_for(record))
+            # When CloudFlare is the target, nameservers managed by CF must be filtered out
+            # of the NS records as the API will reject them.
+            if _type == 'NS' and record.name == '':
+                cf_name_servers = {
+                    ns.rstrip('.')
+                    for ns in self.zones[record.zone.name].get(
+                        'name_servers', []
+                    )
+                }
+                contents = [
+                    c
+                    for c in contents
+                    if c.get('content', '').rstrip('.') not in cf_name_servers
+                ]
+            for value, content in zip(values, contents):
                 content.update({'name': name, 'type': _type, 'ttl': ttl})
 
                 if _type in _PROXIABLE_RECORD_TYPES:

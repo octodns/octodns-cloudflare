@@ -1465,6 +1465,109 @@ class TestCloudflareProvider(TestCase):
         key = provider._gen_key(cf_data)
         self.assertEqual('20 100 "S" "SIP+D2U" "" _sip._udp.unit.tests.', key)
 
+    def test_source_multi_provider_ns(self):
+        provider = CloudflareProvider('test', token='token', pagerules=False)
+        provider._zones = {
+            'unit.tests.': {
+                'id': '123',
+                'name_servers': [
+                    'alice.ns.cloudflare.com',
+                    'alice.ns.cloudflare.com',
+                    'bob.ns.cloudflare.com',
+                ],
+            }
+        }
+
+        zone = Zone('unit.tests.', [])
+        provider._request = Mock()
+        side_effect = [
+            {
+                'result': [
+                    {
+                        "id": "fc12ab34cd5611334422ab3322997653",
+                        "type": "NS",
+                        "name": "unit.tests",
+                        "content": "ns1.unit.tests.",
+                    },
+                    {
+                        "id": "fc12ab34cd5611334422ab3322997654",
+                        "type": "NS",
+                        "name": "unit.tests",
+                        "content": "ns2.unit.tests.",
+                    },
+                ],
+                'result_info': {'count': 2, 'per_page': 50},
+                # /zones/123/dns_records
+            }
+        ]
+        provider._request.side_effect = side_effect
+        records = provider.zone_records(zone)
+        self.assertEqual(4, len(records))
+        zone_records = [
+            {
+                "id": "fc12ab34cd5611334422ab3322997653",
+                "type": "NS",
+                "name": "unit.tests",
+                "content": "ns1.unit.tests.",
+            },
+            {
+                "id": "fc12ab34cd5611334422ab3322997654",
+                "type": "NS",
+                "name": "unit.tests",
+                "content": "ns2.unit.tests.",
+            },
+            {
+                "id": "fc12ab34cd5611334422ab3322997653",
+                "type": "NS",
+                "name": "unit.tests",
+                "content": "alice.ns.cloudflare.com",
+            },
+            {
+                "id": "fc12ab34cd5611334422ab3322997653",
+                "type": "NS",
+                "name": "unit.tests",
+                "content": "bob.ns.cloudflare.com",
+            },
+        ]
+        self.assertEqual(zone_records, records)
+
+    def test_target_multi_provider_ns(self):
+        provider = CloudflareProvider('test', token='token', pagerules=False)
+        provider._zones = {
+            'unit.tests.': {
+                'id': '123',
+                'name_servers': [
+                    'alice.ns.cloudflare.com',
+                    'bob.ns.cloudflare.com',
+                ],
+            }
+        }
+
+        zone = Zone('unit.tests.', [])
+        # NS record managed by another provider
+        ns_record = Record.new(
+            zone, '', {'ttl': 300, 'type': 'NS', 'value': 'ns1.unit.tests.'}
+        )
+        # NS record managed by Cloudflare
+        cf_ns_record = Record.new(
+            zone,
+            '',
+            {'ttl': 300, 'type': 'NS', 'value': 'alice.ns.cloudflare.com'},
+        )
+
+        ns_record_contents = provider._gen_data(ns_record)
+        cf_ns_record_contents = provider._gen_data(cf_ns_record)
+        self.assertEqual(
+            {
+                'name': 'unit.tests',
+                'ttl': 300,
+                'type': 'NS',
+                'content': 'ns1.unit.tests.',
+            },
+            list(ns_record_contents)[0],
+        )
+        self.assertEqual(0, len(list(cf_ns_record_contents)))
+
     def test_srv(self):
         provider = CloudflareProvider('test', 'email', 'token')
 
