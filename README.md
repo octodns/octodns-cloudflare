@@ -77,10 +77,6 @@ providers:
     #timeout: 15
     # Optional. Default: https://api.cloudflare.com/client/v4. API base URL for Cloudflare API requests.
     #api_url: https://api.cloudflare.com/client/v4
-    # Optional. Default: false. Not a constructor argument -- set per-record
-    # via octodns.cloudflare.flatten_cname (see below), shown here for
-    # discoverability. Requires a paid Cloudflare plan.
-    #flatten_cname: false
 ```
 
 #### Internal DNS zones (`CloudflareInternalProvider`)
