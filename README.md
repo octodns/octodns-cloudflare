@@ -77,6 +77,13 @@ providers:
     #timeout: 15
     # Optional. Default: https://api.cloudflare.com/client/v4. API base URL for Cloudflare API requests.
     #api_url: https://api.cloudflare.com/client/v4
+    # Optional. Default: false. Enable when the zone has Cloudflare
+    # multi-provider DNS enabled, so that Cloudflare-managed apex NS records
+    # (absent from the DNS records API, only available via the zone's
+    # `name_servers`) are included when this provider is the source.
+    #
+    # See: https://developers.cloudflare.com/dns/nameservers/nameserver-options/#multi-provider-dns
+    #multi_provider: false
 ```
 
 #### Internal DNS zones (`CloudflareInternalProvider`)
