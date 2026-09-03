@@ -107,6 +107,7 @@ class CloudflareProvider(BaseProvider):
         min_ttl=120,
         timeout=TIMEOUT,
         api_url="https://api.cloudflare.com/client/v4",
+        multi_provider=False,
         *args,
         **kwargs,
     ):
@@ -147,6 +148,7 @@ class CloudflareProvider(BaseProvider):
         self.timeout = timeout
         self._sess = sess
         self.api_url = api_url.rstrip('/')
+        self.multi_provider = multi_provider
 
         self._zones = None
         self._zone_records = {}
@@ -535,26 +537,6 @@ class CloudflareProvider(BaseProvider):
                 )
                 if r['type'] in self.SUPPORTS
             ]
-            # With Multi-provider DNS enabled, /dns_records can contain the apex NS records
-            # for the additional providers while omitting CF's own nameservers.
-            # We therefore need to add CF's NS records back in for the apex if they are missing.
-            cf_name_servers = self.zones[zone.name].get('name_servers', [])
-            if cf_name_servers:
-                apex_ns = [
-                    r
-                    for r in records
-                    if r['type'] == 'NS'
-                    and zone.hostname_from_fqdn(r['name']) == ''
-                ]
-                if apex_ns:
-                    existing = {r['content'] for r in apex_ns}
-                    template = apex_ns[0]
-                    for ns in cf_name_servers:
-                        if ns not in existing:
-                            record = template.copy()
-                            record['content'] = ns
-                            records.append(record)
-                            existing.add(ns)
             if self.pagerules:
                 path = f'/zones/{zone_id}/pagerules'
                 resp = self._try_request(
@@ -720,6 +702,31 @@ class CloudflareProvider(BaseProvider):
                     name = zone.hostname_from_fqdn(record['name'])
                     _type = record['type']
                     values[name][record['type']].append(record)
+
+            # With Multi-provider DNS enabled, CF source records may contain the
+            # apex NS records for the additional providers while omitting
+            # Cloudflare's own nameservers. We thereforer need to add CF's NS records
+            # back in for the apex if they are missing.
+            if self.multi_provider:
+                cf_name_servers = self.zones[zone.name].get('name_servers', [])
+                if cf_name_servers:
+                    apex_ns = values.get('', {}).get('NS', [])
+                    if not apex_ns:
+                        values['']['NS'] = []
+                    existing = {
+                        record['content'].rstrip('.') for record in apex_ns
+                    }
+                    for ns in cf_name_servers:
+                        if ns not in existing:
+                            record = {
+                                'name': zone.name,
+                                'type': 'NS',
+                                'content': ns,
+                                'ttl': 300,
+                            }
+                            values['']['NS'].append(record)
+                            # ensure the same NS record is not added multiple times
+                            existing.add(ns)
 
             for name, types in values.items():
                 for _type, records in types.items():
@@ -1288,21 +1295,21 @@ class CloudflareProvider(BaseProvider):
             values = self._values_in_content_order(record)
             value_metadata = self._value_metadata(record)
             contents = list(contents_for(record))
-            # When CloudFlare is the target, nameservers managed by CF must be filtered out
-            # of the NS records as the API will reject them.
-            if _type == 'NS' and record.name == '':
-                cf_name_servers = {
-                    ns.rstrip('.')
-                    for ns in self.zones[record.zone.name].get(
-                        'name_servers', []
-                    )
-                }
-                contents = [
-                    c
-                    for c in contents
-                    if c.get('content', '').rstrip('.') not in cf_name_servers
-                ]
             for value, content in zip(values, contents):
+                if _type == 'NS' and record.name == '':
+                    # When CloudFlare is the target, nameservers managed by CF must be filtered out
+                    # of the NS records as the API will reject them.
+                    cf_name_servers = {
+                        ns.rstrip('.')
+                        for ns in self.zones[record.zone.name].get(
+                            'name_servers', []
+                        )
+                    }
+                    if (
+                        content.get('content', '').rstrip('.')
+                        in cf_name_servers
+                    ):
+                        continue
                 content.update({'name': name, 'type': _type, 'ttl': ttl})
 
                 if _type in _PROXIABLE_RECORD_TYPES:
