@@ -77,6 +77,10 @@ providers:
     #timeout: 15
     # Optional. Default: https://api.cloudflare.com/client/v4. API base URL for Cloudflare API requests.
     #api_url: https://api.cloudflare.com/client/v4
+    # Optional. Default: false. Not a constructor argument -- set per-record
+    # via octodns.cloudflare.flatten_cname (see below), shown here for
+    # discoverability. Requires a paid Cloudflare plan.
+    #flatten_cname: false
 ```
 
 #### Internal DNS zones (`CloudflareInternalProvider`)
@@ -143,6 +147,29 @@ name:
     ttl: 120
     type: A
     value: 1.2.3.4
+```
+
+Note: Per-record CNAME flattening is opt-in for non-apex, non-proxied
+`CNAME` records and requires a paid Cloudflare plan -- Cloudflare rejects the
+setting outright on Free zones. Only add `octodns.cloudflare.flatten_cname`
+when `CloudflareProvider` should manage this setting. If the key is omitted,
+the provider leaves the current API state unchanged. Set it to `true` to
+enable flattening or `false` to disable flattening.
+
+The zone must not have zone-wide CNAME flattening enabled and the target must
+be outside the zone for the setting to take effect. The setting is unavailable
+for proxied records and has no effect at the zone apex because Cloudflare
+flattens apex CNAMEs regardless of this setting. Internal DNS applies CNAME
+flattening by default and the setting cannot be turned off.
+
+```yaml
+cname:
+    octodns:
+        cloudflare:
+            flatten_cname: true
+    ttl: 120
+    type: CNAME
+    value: external.example.com.
 ```
 
 Note: All record types also support tagging, which can be combined with the tag [processor](#processors) to support advanced filtering scenarios.

@@ -89,6 +89,11 @@ class CloudflareProvider(BaseProvider):
 
     TIMEOUT = 15
 
+    # Per-record CNAME flattening is only available on public DNS zones;
+    # Internal DNS applies CNAME flattening by default and cannot be turned
+    # off, so it does not expose the setting.
+    _supports_flatten_cname = True
+
     def __init__(
         self,
         id,
@@ -623,6 +628,19 @@ class CloudflareProvider(BaseProvider):
             self.log.debug('_record_for: auto-ttl=True')
             record.octodns['cloudflare'] = {'auto-ttl': True}
 
+        # Per-record CNAME flattening is only available on non-proxied,
+        # non-apex CNAMEs in public zones; only attach the metadata when
+        # Cloudflare has it enabled so absent/false stays noise-free.
+        # The flatten_cname argument lives in the settings field.
+        # https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/create/#(resource)%20dns.records%20%3E%20(model)%20cname_record%20%3E%20(schema)%20%3E%20(property)%20settings
+        if self._supports_flatten_cname and _type == 'CNAME' and not proxied:
+            settings = records[0].get('settings')
+            if isinstance(settings, dict) and settings.get('flatten_cname'):
+                try:
+                    record.octodns['cloudflare']['flatten_cname'] = True
+                except KeyError:
+                    record.octodns['cloudflare'] = {'flatten_cname': True}
+
         # update record comment & tags. Cloudflare keeps these on each
         # individual DNS object (one per value); when every value shares the
         # same metadata we use the record-level octodns.cloudflare shorthand,
@@ -734,18 +752,21 @@ class CloudflareProvider(BaseProvider):
             new_is_proxied = self._record_is_proxied(new)
             new_is_just_auto_ttl = self._record_is_just_auto_ttl(new)
             new_is_urlfwd = new._type == 'URLFWD'
-            new = new.data
 
             existing = change.existing
             existing_is_proxied = self._record_is_proxied(existing)
             existing_is_just_auto_ttl = self._record_is_just_auto_ttl(existing)
             existing_is_urlfwd = existing._type == 'URLFWD'
+            flatten_cname_differs = self._flatten_cname_differs(existing, new)
+
+            new = new.data
             existing = existing.data
 
             if (
                 (new_is_proxied != existing_is_proxied)
                 or (new_is_just_auto_ttl != existing_is_just_auto_ttl)
                 or (new_is_urlfwd != existing_is_urlfwd)
+                or flatten_cname_differs
             ):
                 # changes in special flags, definitely need this change
                 return True
@@ -753,8 +774,12 @@ class CloudflareProvider(BaseProvider):
             # at this point we know that all the special flags match in new and
             # existing so we can focus on the actual record details, so we can
             # ignore octodns.cloudflare
-            new.get('octodns', {}).pop('cloudflare', None)
-            existing.get('octodns', {}).pop('cloudflare', None)
+            for data in (new, existing):
+                octodns = data.get('octodns')
+                if octodns is not None:
+                    octodns.pop('cloudflare', None)
+                    if not octodns:
+                        data.pop('octodns')
 
             # TTLs are ignored for these, best way to do that is to just copy
             # it over so they'll match
@@ -798,6 +823,8 @@ class CloudflareProvider(BaseProvider):
 
         if self.regional_services:
             self._validate_regions(desired)
+
+        self._validate_flatten_cname(desired)
 
         self._validate_value_metadata(desired)
 
@@ -872,6 +899,60 @@ class CloudflareProvider(BaseProvider):
                 fqdn = f'{name}.{desired.name}' if name else desired.name
                 msg = f'conflicting regions {shown} configured for records named {fqdn}; Cloudflare applies a single region per hostname'
                 fallback = 'the last record applied determines the region'
+                self.supports_warn_or_except(msg, fallback)
+
+    def _validate_flatten_cname(self, desired):
+        # Per-record CNAME flattening only applies to ordinary (non-apex,
+        # non-proxied) CNAME records in public zones. Cloudflare flattens
+        # apex CNAMEs regardless of this setting and does not allow the setting
+        # on proxied records. Internal DNS applies CNAME flattening by default
+        # and the setting cannot be turned off, so it is rejected/ignored
+        # there.
+        if not self._supports_flatten_cname:
+            for record in desired.records:
+                if (
+                    record.octodns.get('cloudflare', {}).get('flatten_cname')
+                    is None
+                ):
+                    continue
+                msg = (
+                    f'{record.fqdn} {record._type}: '
+                    'octodns.cloudflare.flatten_cname is not supported by '
+                    f'{self.__class__.__name__}'
+                )
+                fallback = 'ignoring octodns.cloudflare.flatten_cname'
+                self.supports_warn_or_except(msg, fallback)
+            return
+
+        for record in desired.records:
+            flatten_cname = record.octodns.get('cloudflare', {}).get(
+                'flatten_cname'
+            )
+            if flatten_cname is None:
+                continue
+            if not isinstance(flatten_cname, bool):
+                msg = (
+                    f'{record.fqdn} {record._type}: '
+                    'octodns.cloudflare.flatten_cname must be a boolean value'
+                )
+                fallback = 'ignoring octodns.cloudflare.flatten_cname'
+                self.supports_warn_or_except(msg, fallback)
+                continue
+            if record._type != 'CNAME':
+                msg = (
+                    f'{record.fqdn} {record._type}: '
+                    'octodns.cloudflare.flatten_cname is only supported on '
+                    'CNAME records'
+                )
+                fallback = 'ignoring octodns.cloudflare.flatten_cname'
+                self.supports_warn_or_except(msg, fallback)
+            elif self._record_is_proxied(record):
+                msg = (
+                    f'{record.fqdn} {record._type}: '
+                    'octodns.cloudflare.flatten_cname is not supported on '
+                    'proxied records'
+                )
+                fallback = 'ignoring octodns.cloudflare.flatten_cname'
                 self.supports_warn_or_except(msg, fallback)
 
     def _contents_for_multiple(self, record):
@@ -1057,6 +1138,32 @@ class CloudflareProvider(BaseProvider):
             not self._record_is_proxied(record)
             and not self.cdn
             and record.octodns.get('cloudflare', {}).get('auto-ttl', False)
+        )
+
+    def _record_flatten_cname(self, record):
+        'Per-record CNAME flattening value, or None when not managed.'
+        if (
+            not self._supports_flatten_cname
+            or record._type != 'CNAME'
+            or self._record_is_proxied(record)
+        ):
+            return None
+        flatten_cname = record.octodns.get('cloudflare', {}).get(
+            'flatten_cname'
+        )
+        if isinstance(flatten_cname, bool):
+            return flatten_cname
+        return None
+
+    def _flatten_cname_differs(self, existing, desired):
+        '''Whether desired explicitly changes existing CNAME flattening.
+
+        A missing desired value is unmanaged. Existing None and False both
+        represent disabled when compared with an explicit desired value.
+        '''
+        desired_flatten_cname = self._record_flatten_cname(desired)
+        return desired_flatten_cname is not None and desired_flatten_cname != (
+            self._record_flatten_cname(existing) is True
         )
 
     def _values_in_content_order(self, record):
@@ -1272,6 +1379,12 @@ class CloudflareProvider(BaseProvider):
 
                 if _type in _PROXIABLE_RECORD_TYPES:
                     content.update({'proxied': self._record_is_proxied(record)})
+
+                flatten_cname = self._record_flatten_cname(record)
+                if flatten_cname is not None:
+                    content.update(
+                        {'settings': {'flatten_cname': flatten_cname}}
+                    )
 
                 comment = self._record_comment(record, value, value_metadata)
                 if comment:
@@ -1511,7 +1624,8 @@ class CloudflareProvider(BaseProvider):
         for key, data in new.items():
             if key in existing:
                 # To update we need to combine the new data and existing's
-                # record_id. old_data is just for debugging/logging purposes
+                # record_id. old_data supports logging and preserves unmanaged
+                # settings during PUT updates.
                 old_info = existing[key]
                 updates[key] = {
                     'record_id': old_info['record_id'],
@@ -1568,6 +1682,17 @@ class CloudflareProvider(BaseProvider):
                 path = f'/zones/{zone_id}/pagerules/{record_id}'
             else:
                 path = f'/zones/{zone_id}/dns_records/{record_id}'
+            # When the desired record leaves flatten_cname unmanaged (absent)
+            # on an ordinary (non-proxied) CNAME, preserve an existing API true
+            # value so an unrelated update does not clear it. Explicit desired
+            # values are already emitted by _gen_data and take precedence.
+            if (
+                _type == 'CNAME'
+                and 'settings' not in data
+                and data.get('proxied') is not True
+                and old_data.get('settings', {}).get('flatten_cname') is True
+            ):
+                data['settings'] = old_data['settings']
             self.log.debug(
                 '_apply_Update: updating %s, %s -> %s',
                 record_id,
@@ -1764,11 +1889,15 @@ class CloudflareProvider(BaseProvider):
                 continue
 
             if (
-                self._record_is_proxied(existing_record)
-                != self._record_is_proxied(desired_record)
-            ) or (
-                self._record_is_just_auto_ttl(existing_record)
-                != self._record_is_just_auto_ttl(desired_record)
+                (
+                    self._record_is_proxied(existing_record)
+                    != self._record_is_proxied(desired_record)
+                )
+                or (
+                    self._record_is_just_auto_ttl(existing_record)
+                    != self._record_is_just_auto_ttl(desired_record)
+                )
+                or self._flatten_cname_differs(existing_record, desired_record)
             ):
                 extra_changes.append(Update(existing_record, desired_record))
 
@@ -1820,6 +1949,11 @@ class CloudflareInternalProvider(CloudflareProvider):
     SUPPORTS = set(CloudflareProvider.SUPPORTS)
 
     _FORBIDDEN_PARAMS = ('cdn', 'pagerules', 'plan_type', 'regional_services')
+
+    # Internal DNS applies CNAME flattening by default and the per-record
+    # flattening setting cannot be turned off.
+    # https://developers.cloudflare.com/dns/internal-dns/internal-zones/internal-dns-records/#cname-flattening-in-internal-dns
+    _supports_flatten_cname = False
 
     def __init__(self, id, *args, account_id=None, view_id=None, **kwargs):
         if account_id is None:

@@ -20,6 +20,7 @@ from octodns.zone import Zone
 
 from octodns_cloudflare import (
     CloudflareAuthenticationError,
+    CloudflareInternalProvider,
     CloudflareProvider,
     CloudflareRateLimitError,
 )
@@ -63,6 +64,15 @@ def set_record_tags(record, tags):
         record.octodns['cloudflare']['tags'] = tags
     except KeyError:
         record.octodns['cloudflare'] = {'tags': tags}
+
+    return record
+
+
+def set_record_flatten_cname_flag(record, flatten_cname):
+    try:
+        record.octodns['cloudflare']['flatten_cname'] = flatten_cname
+    except KeyError:
+        record.octodns['cloudflare'] = {'flatten_cname': flatten_cname}
 
     return record
 
@@ -2043,6 +2053,119 @@ class TestCloudflareProvider(TestCase):
         self.assertTrue(record.octodns['cloudflare']['auto-ttl'])
         self.assertFalse(record.octodns['cloudflare'].get('proxied', False))
 
+    def test_record_for_flatten_cname_populates_metadata(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        name = 'flatten.unit.tests'
+        _type = 'CNAME'
+        zone_records = [
+            {
+                'id': 'fc12ab34cd5611334422ab3322997642',
+                'type': _type,
+                'name': name,
+                'content': 'www.unit.tests',
+                'proxiable': True,
+                'proxied': False,
+                'ttl': 300,
+                'settings': {'flatten_cname': True},
+                'locked': False,
+                'zone_id': 'ff12ab34cd5611334422ab3322997650',
+                'zone_name': 'unit.tests',
+                'modified_on': '2017-03-11T18:01:43.420689Z',
+                'created_on': '2017-03-11T18:01:43.420689Z',
+                'meta': {'auto_added': False},
+            }
+        ]
+
+        zone = Zone('unit.tests.', [])
+        record = provider._record_for(
+            zone, 'flatten', _type, zone_records, False
+        )
+
+        self.assertTrue(record.octodns['cloudflare']['flatten_cname'])
+
+    def test_record_for_flatten_cname_false_omits_metadata(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        zone_records = [
+            {
+                'id': 'fc12ab34cd5611334422ab3322997642',
+                'type': 'CNAME',
+                'name': 'plain.unit.tests',
+                'content': 'www.unit.tests',
+                'proxiable': True,
+                'proxied': False,
+                'ttl': 300,
+                'settings': {'flatten_cname': False},
+                'locked': False,
+                'zone_id': 'ff12ab34cd5611334422ab3322997650',
+                'zone_name': 'unit.tests',
+                'modified_on': '2017-03-11T18:01:43.420689Z',
+                'created_on': '2017-03-11T18:01:43.420689Z',
+                'meta': {'auto_added': False},
+            }
+        ]
+
+        zone = Zone('unit.tests.', [])
+        record = provider._record_for(
+            zone, 'plain', 'CNAME', zone_records, False
+        )
+
+        self.assertNotIn('flatten_cname', record.octodns.get('cloudflare', {}))
+
+    def test_record_for_flatten_cname_proxied_ignored(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        zone_records = [
+            {
+                'id': 'fc12ab34cd5611334422ab3322997642',
+                'type': 'CNAME',
+                'name': 'proxied.unit.tests',
+                'content': 'www.unit.tests',
+                'proxiable': True,
+                'proxied': True,
+                'ttl': 1,
+                'settings': {'flatten_cname': True},
+                'locked': False,
+                'zone_id': 'ff12ab34cd5611334422ab3322997650',
+                'zone_name': 'unit.tests',
+                'modified_on': '2017-03-11T18:01:43.420689Z',
+                'created_on': '2017-03-11T18:01:43.420689Z',
+                'meta': {'auto_added': False},
+            }
+        ]
+
+        zone = Zone('unit.tests.', [])
+        record = provider._record_for(
+            zone, 'proxied', 'CNAME', zone_records, False
+        )
+
+        self.assertNotIn('flatten_cname', record.octodns.get('cloudflare', {}))
+
+    def test_record_for_flatten_cname_apex_ignored(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        zone_records = [
+            {
+                'id': 'fc12ab34cd5611334422ab3322997642',
+                'type': 'CNAME',
+                'name': 'unit.tests',
+                'content': 'www.unit.tests',
+                'proxiable': True,
+                'proxied': False,
+                'ttl': 300,
+                'settings': {'flatten_cname': True},
+                'locked': False,
+                'zone_id': 'ff12ab34cd5611334422ab3322997650',
+                'zone_name': 'unit.tests',
+                'modified_on': '2017-03-11T18:01:43.420689Z',
+                'created_on': '2017-03-11T18:01:43.420689Z',
+                'meta': {'auto_added': False},
+            }
+        ]
+
+        zone = Zone('unit.tests.', [])
+        record = provider._record_for(zone, '', 'CNAME', zone_records, False)
+
+        self.assertEqual('ALIAS', record._type)
+        self.assertNotIn('flatten_cname', record.octodns.get('cloudflare', {}))
+
     def test_regional_hostname_recordfor_sets_region(self):
         # _record_for reads the per-zone mapping captured by zone_records and
         # annotates the matching proxiable record with its region_key
@@ -2673,6 +2796,108 @@ class TestCloudflareProvider(TestCase):
             provider._include_change(Update(a1_auto_ttl, a1_auto_ttl))
         )
 
+    def test_include_change_flatten_cname(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+
+        zone = Zone('unit.tests.', [])
+        plain = Record.new(
+            zone,
+            'cname',
+            {'ttl': 300, 'type': 'CNAME', 'value': 'www.unit.tests.'},
+        )
+        flattened = set_record_flatten_cname_flag(
+            Record.new(
+                zone,
+                'cname',
+                {'ttl': 300, 'type': 'CNAME', 'value': 'www.unit.tests.'},
+            ),
+            True,
+        )
+        unflattened = set_record_flatten_cname_flag(
+            Record.new(
+                zone,
+                'cname',
+                {'ttl': 300, 'type': 'CNAME', 'value': 'www.unit.tests.'},
+            ),
+            False,
+        )
+
+        # Explicit desired changes are managed.
+        self.assertTrue(provider._include_change(Update(plain, flattened)))
+        self.assertTrue(
+            provider._include_change(Update(flattened, unflattened))
+        )
+        self.assertTrue(
+            provider._include_change(Update(unflattened, flattened))
+        )
+        self.assertFalse(provider._include_change(Update(plain, plain)))
+        self.assertFalse(provider._include_change(Update(flattened, flattened)))
+        self.assertFalse(
+            provider._include_change(Update(unflattened, unflattened))
+        )
+        self.assertFalse(provider._include_change(Update(unflattened, plain)))
+        self.assertFalse(provider._include_change(Update(plain, unflattened)))
+
+    def test_include_change_ignores_unmanaged_flatten_cname(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+
+        zone = Zone('unit.tests.', [])
+        existing = set_record_flatten_cname_flag(
+            Record.new(
+                zone,
+                'cname',
+                {'ttl': 300, 'type': 'CNAME', 'value': 'www.unit.tests.'},
+            ),
+            True,
+        )
+        desired = Record.new(
+            zone,
+            'cname',
+            {'ttl': 300, 'type': 'CNAME', 'value': 'www.unit.tests.'},
+        )
+
+        # Existing has Cloudflare metadata while desired has no octodns key.
+        # Removing that metadata must not leave an empty dict that creates a
+        # false content difference for the unmanaged desired setting.
+        self.assertTrue(existing.data['octodns']['cloudflare']['flatten_cname'])
+        self.assertNotIn('octodns', desired.data)
+        self.assertFalse(provider._include_change(Update(existing, desired)))
+
+    def test_include_change_preserves_other_octodns_keys(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+
+        zone = Zone('unit.tests.', [])
+        existing = Record.new(
+            zone,
+            'a',
+            {
+                'ttl': 300,
+                'type': 'A',
+                'value': '1.2.3.4',
+                'octodns': {
+                    'cloudflare': {'comment': 'managed'},
+                    'other': {'key': 'value'},
+                },
+            },
+        )
+        new = Record.new(
+            zone,
+            'a',
+            {
+                'ttl': 300,
+                'type': 'A',
+                'value': '1.2.3.4',
+                'octodns': {
+                    'cloudflare': {'comment': 'managed'},
+                    'other': {'key': 'value'},
+                },
+            },
+        )
+
+        # When special flags match, cloudflare metadata is stripped for
+        # comparison but other octodns keys are preserved.
+        self.assertFalse(provider._include_change(Update(existing, new)))
+
     def test_include_change_min_ttl(self):
         provider = CloudflareProvider('test', 'email', 'token')
 
@@ -2762,6 +2987,87 @@ class TestCloudflareProvider(TestCase):
         data = next(provider._gen_data(record))
 
         self.assertTrue(data['proxied'])
+
+    def test_cname_gendata_emits_flatten_cname(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        zone = Zone('unit.tests.', [])
+        record = set_record_flatten_cname_flag(
+            Record.new(
+                zone,
+                'cname',
+                {'ttl': 300, 'type': 'CNAME', 'value': 'www.unit.tests.'},
+            ),
+            True,
+        )
+
+        data = next(provider._gen_data(record))
+
+        self.assertEqual({'flatten_cname': True}, data['settings'])
+
+    def test_cname_gendata_omits_flatten_cname_when_unmanaged(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        zone = Zone('unit.tests.', [])
+        record = Record.new(
+            zone,
+            'cname',
+            {'ttl': 300, 'type': 'CNAME', 'value': 'www.unit.tests.'},
+        )
+
+        data = next(provider._gen_data(record))
+
+        self.assertNotIn('settings', data)
+
+    def test_cname_gendata_emits_flatten_cname_false(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        zone = Zone('unit.tests.', [])
+        record = set_record_flatten_cname_flag(
+            Record.new(
+                zone,
+                'cname',
+                {'ttl': 300, 'type': 'CNAME', 'value': 'www.unit.tests.'},
+            ),
+            False,
+        )
+
+        data = next(provider._gen_data(record))
+
+        self.assertEqual({'flatten_cname': False}, data['settings'])
+
+    def test_cname_gendata_proxied_no_settings(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        zone = Zone('unit.tests.', [])
+        record = set_record_flatten_cname_flag(
+            set_record_proxied_flag(
+                Record.new(
+                    zone,
+                    'cname',
+                    {'ttl': 300, 'type': 'CNAME', 'value': 'www.unit.tests.'},
+                ),
+                True,
+            ),
+            True,
+        )
+
+        data = next(provider._gen_data(record))
+
+        self.assertNotIn('settings', data)
+
+    def test_alias_gendata_no_flatten_cname(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        zone = Zone('unit.tests.', [])
+        record = set_record_flatten_cname_flag(
+            Record.new(
+                zone,
+                '',
+                {'ttl': 300, 'type': 'ALIAS', 'value': 'www.unit.tests.'},
+            ),
+            True,
+        )
+
+        data = next(provider._gen_data(record))
+
+        self.assertEqual('CNAME', data['type'])
+        self.assertNotIn('settings', data)
 
     def test_createrecord_extrachanges_returnsemptylist(self):
         provider = CloudflareProvider('test', 'email', 'token')
@@ -3629,6 +3935,280 @@ class TestCloudflareProvider(TestCase):
             'a new comment',
         )
 
+    def test_flatten_cname_extra_changes(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+
+        def zone_records(flatten_cname):
+            return [
+                {
+                    'id': 'fc12ab34cd5611334422ab3322997642',
+                    'type': 'CNAME',
+                    'name': 'a.unit.tests',
+                    'content': 'www.unit.tests',
+                    'proxiable': True,
+                    'proxied': False,
+                    'ttl': 300,
+                    'settings': {'flatten_cname': flatten_cname},
+                    'locked': False,
+                    'zone_id': 'ff12ab34cd5611334422ab3322997650',
+                    'zone_name': 'unit.tests',
+                    'modified_on': '2017-03-11T18:01:43.420689Z',
+                    'created_on': '2017-03-11T18:01:43.420689Z',
+                    'meta': {'auto_added': False},
+                }
+            ]
+
+        provider.zone_records = Mock(return_value=zone_records(True))
+        existing = Zone('unit.tests.', [])
+        provider.populate(existing)
+
+        # Explicit desired false against an existing true value triggers an
+        # update that disables flattening.
+        desired = Zone('unit.tests.', [])
+        desired.add_record(
+            set_record_flatten_cname_flag(
+                Record.new(
+                    desired,
+                    'a',
+                    {'ttl': 300, 'type': 'CNAME', 'value': 'www.unit.tests.'},
+                ),
+                False,
+            )
+        )
+        changes = existing.changes(desired, provider)
+
+        extra_changes = provider._extra_changes(existing, desired, changes)
+
+        self.assertEqual(1, len(extra_changes))
+        self.assertIsInstance(extra_changes[0], Update)
+        self.assertTrue(
+            extra_changes[0]
+            .existing.octodns.get('cloudflare', {})
+            .get('flatten_cname', False)
+        )
+        self.assertFalse(
+            extra_changes[0]
+            .new.octodns.get('cloudflare', {})
+            .get('flatten_cname', False)
+        )
+
+    def test_flatten_cname_extra_changes_unmanaged(self):
+        provider = CloudflareProvider('test', 'email', 'token')
+        provider.zone_records = Mock(
+            return_value=[
+                {
+                    'id': 'fc12ab34cd5611334422ab3322997642',
+                    'type': 'CNAME',
+                    'name': 'a.unit.tests',
+                    'content': 'www.unit.tests',
+                    'proxiable': True,
+                    'proxied': False,
+                    'ttl': 300,
+                    'settings': {'flatten_cname': True},
+                    'locked': False,
+                    'zone_id': 'ff12ab34cd5611334422ab3322997650',
+                    'zone_name': 'unit.tests',
+                    'modified_on': '2017-03-11T18:01:43.420689Z',
+                    'created_on': '2017-03-11T18:01:43.420689Z',
+                    'meta': {'auto_added': False},
+                }
+            ]
+        )
+        existing = Zone('unit.tests.', [])
+        provider.populate(existing)
+        desired = Zone('unit.tests.', [])
+        desired.add_record(
+            Record.new(
+                desired,
+                'a',
+                {'ttl': 300, 'type': 'CNAME', 'value': 'www.unit.tests.'},
+            )
+        )
+        changes = existing.changes(desired, provider)
+
+        # An absent desired value leaves the existing API state unmanaged, so
+        # there is no flatten-only change.
+        self.assertFalse(changes)
+        self.assertFalse(provider._extra_changes(existing, desired, changes))
+
+    def test_apply_update_preserves_unmanaged_flatten_cname_true(self):
+        provider = CloudflareProvider('test', 'email', 'token', retry_period=0)
+        provider._zones = {'unit.tests.': {'id': '42'}}
+        provider.zone_records = Mock(
+            return_value=[
+                {
+                    'id': 'fc12ab34cd5611334422ab3322997642',
+                    'type': 'CNAME',
+                    'name': 'a.unit.tests',
+                    'content': 'www.unit.tests',
+                    'proxiable': True,
+                    'proxied': False,
+                    'ttl': 300,
+                    'settings': {'flatten_cname': True},
+                    'locked': False,
+                    'zone_id': 'ff12ab34cd5611334422ab3322997650',
+                    'zone_name': 'unit.tests',
+                    'modified_on': '2017-03-11T18:01:43.420689Z',
+                    'created_on': '2017-03-11T18:01:43.420689Z',
+                    'meta': {'auto_added': False},
+                }
+            ]
+        )
+        provider._request = Mock(return_value=None)
+
+        zone = Zone('unit.tests.', [])
+        existing = Record.new(
+            zone, 'a', {'ttl': 300, 'type': 'CNAME', 'value': 'www.unit.tests.'}
+        )
+        # Desired leaves flatten_cname unmanaged and only changes the TTL.
+        new = Record.new(
+            zone, 'a', {'ttl': 600, 'type': 'CNAME', 'value': 'www.unit.tests.'}
+        )
+
+        provider._apply_Update(Update(existing, new))
+
+        provider._request.assert_called_once_with(
+            'PUT',
+            '/zones/42/dns_records/fc12ab34cd5611334422ab3322997642',
+            data={
+                'content': 'www.unit.tests.',
+                'type': 'CNAME',
+                'name': 'a.unit.tests',
+                'proxied': False,
+                'ttl': 600,
+                'settings': {'flatten_cname': True},
+            },
+        )
+
+    def test_apply_update_proxied_transition_omits_flatten_cname(self):
+        provider = CloudflareProvider('test', 'email', 'token', retry_period=0)
+        provider._zones = {'unit.tests.': {'id': '42'}}
+        provider.zone_records = Mock(
+            return_value=[
+                {
+                    'id': 'fc12ab34cd5611334422ab3322997642',
+                    'type': 'CNAME',
+                    'name': 'a.unit.tests',
+                    'content': 'www.unit.tests',
+                    'proxiable': True,
+                    'proxied': False,
+                    'ttl': 300,
+                    'settings': {'flatten_cname': True},
+                    'locked': False,
+                    'zone_id': 'ff12ab34cd5611334422ab3322997650',
+                    'zone_name': 'unit.tests',
+                    'modified_on': '2017-03-11T18:01:43.420689Z',
+                    'created_on': '2017-03-11T18:01:43.420689Z',
+                    'meta': {'auto_added': False},
+                }
+            ]
+        )
+        provider._request = Mock(return_value=None)
+
+        zone = Zone('unit.tests.', [])
+        existing = Record.new(
+            zone, 'a', {'ttl': 300, 'type': 'CNAME', 'value': 'www.unit.tests.'}
+        )
+        new = set_record_proxied_flag(
+            Record.new(
+                zone,
+                'a',
+                {'ttl': 300, 'type': 'CNAME', 'value': 'www.unit.tests.'},
+            ),
+            True,
+        )
+
+        provider._apply_Update(Update(existing, new))
+
+        provider._request.assert_called_once_with(
+            'PUT',
+            '/zones/42/dns_records/fc12ab34cd5611334422ab3322997642',
+            data={
+                'content': 'www.unit.tests.',
+                'type': 'CNAME',
+                'name': 'a.unit.tests',
+                'proxied': True,
+                'ttl': 1,
+            },
+        )
+
+    def test_apply_update_explicit_false_clears_flatten_cname_true(self):
+        provider = CloudflareProvider('test', 'email', 'token', retry_period=0)
+        provider._zones = {'unit.tests.': {'id': '42'}}
+        provider.zone_records = Mock(
+            return_value=[
+                {
+                    'id': 'fc12ab34cd5611334422ab3322997642',
+                    'type': 'CNAME',
+                    'name': 'a.unit.tests',
+                    'content': 'www.unit.tests',
+                    'proxiable': True,
+                    'proxied': False,
+                    'ttl': 300,
+                    'settings': {'flatten_cname': True},
+                    'locked': False,
+                    'zone_id': 'ff12ab34cd5611334422ab3322997650',
+                    'zone_name': 'unit.tests',
+                    'modified_on': '2017-03-11T18:01:43.420689Z',
+                    'created_on': '2017-03-11T18:01:43.420689Z',
+                    'meta': {'auto_added': False},
+                }
+            ]
+        )
+        provider._request = Mock(return_value=None)
+
+        zone = Zone('unit.tests.', [])
+        existing = Record.new(
+            zone, 'a', {'ttl': 300, 'type': 'CNAME', 'value': 'www.unit.tests.'}
+        )
+        new = set_record_flatten_cname_flag(
+            Record.new(
+                zone,
+                'a',
+                {'ttl': 300, 'type': 'CNAME', 'value': 'www.unit.tests.'},
+            ),
+            False,
+        )
+
+        provider._apply_Update(Update(existing, new))
+
+        provider._request.assert_called_once_with(
+            'PUT',
+            '/zones/42/dns_records/fc12ab34cd5611334422ab3322997642',
+            data={
+                'content': 'www.unit.tests.',
+                'type': 'CNAME',
+                'name': 'a.unit.tests',
+                'proxied': False,
+                'ttl': 300,
+                'settings': {'flatten_cname': False},
+            },
+        )
+
+    def test_apply_create_omits_unmanaged_flatten_cname(self):
+        provider = CloudflareProvider('test', 'email', 'token', retry_period=0)
+        provider._zones = {'unit.tests.': {'id': '42'}}
+        provider._request = Mock(return_value=None)
+
+        zone = Zone('unit.tests.', [])
+        new = Record.new(
+            zone, 'a', {'ttl': 300, 'type': 'CNAME', 'value': 'www.unit.tests.'}
+        )
+
+        provider._apply_Create(Create(new))
+
+        provider._request.assert_called_once_with(
+            'POST',
+            '/zones/42/dns_records',
+            data={
+                'content': 'www.unit.tests.',
+                'type': 'CNAME',
+                'name': 'a.unit.tests',
+                'proxied': False,
+                'ttl': 300,
+            },
+        )
+
     def test_per_value_metadata_populate_differing(self):
         # multiple values, each Cloudflare object with its own comment/tags ->
         # an explicit per-value list, no record-level shorthand
@@ -3947,6 +4527,132 @@ class TestCloudflareProvider(TestCase):
         )
         result = provider._process_desired_zone(valid)
         self.assertEqual(1, len(result.records))
+
+    @patch('octodns_cloudflare.BaseProvider._process_desired_zone')
+    def test_flatten_cname_validation_non_cname(self, mock_base):
+        mock_base.side_effect = lambda desired: desired
+        zone = Zone('unit.tests.', [])
+        desired = zone.copy()
+        desired.add_record(
+            Record.new(
+                zone,
+                'a',
+                {
+                    'ttl': 300,
+                    'type': 'A',
+                    'value': '1.2.3.4',
+                    'octodns': {'cloudflare': {'flatten_cname': True}},
+                },
+            )
+        )
+
+        provider = CloudflareProvider(
+            'test', 'email', 'token', strict_supports=True
+        )
+        with self.assertRaises(SupportsException) as ctx:
+            provider._process_desired_zone(desired)
+        self.assertIn('only supported on CNAME records', str(ctx.exception))
+
+        provider = CloudflareProvider(
+            'test', 'email', 'token', strict_supports=False
+        )
+        result = provider._process_desired_zone(desired)
+        self.assertEqual(1, len(result.records))
+
+    @patch('octodns_cloudflare.BaseProvider._process_desired_zone')
+    def test_flatten_cname_validation_proxied(self, mock_base):
+        mock_base.side_effect = lambda desired: desired
+        zone = Zone('unit.tests.', [])
+        desired = zone.copy()
+        desired.add_record(
+            set_record_proxied_flag(
+                Record.new(
+                    zone,
+                    'cname',
+                    {
+                        'ttl': 300,
+                        'type': 'CNAME',
+                        'value': 'www.unit.tests.',
+                        'octodns': {'cloudflare': {'flatten_cname': True}},
+                    },
+                ),
+                True,
+            )
+        )
+
+        provider = CloudflareProvider(
+            'test', 'email', 'token', strict_supports=True
+        )
+        with self.assertRaises(SupportsException) as ctx:
+            provider._process_desired_zone(desired)
+        self.assertIn('not supported on proxied records', str(ctx.exception))
+
+        provider = CloudflareProvider(
+            'test', 'email', 'token', strict_supports=False
+        )
+        result = provider._process_desired_zone(desired)
+        self.assertEqual(1, len(result.records))
+
+    @patch('octodns_cloudflare.BaseProvider._process_desired_zone')
+    def test_flatten_cname_validation_valid_cname(self, mock_base):
+        mock_base.side_effect = lambda desired: desired
+        zone = Zone('unit.tests.', [])
+        desired = zone.copy()
+        desired.add_record(
+            Record.new(
+                zone,
+                'cname',
+                {
+                    'ttl': 300,
+                    'type': 'CNAME',
+                    'value': 'www.unit.tests.',
+                    'octodns': {'cloudflare': {'flatten_cname': True}},
+                },
+            )
+        )
+
+        provider = CloudflareProvider(
+            'test', 'email', 'token', strict_supports=True
+        )
+        result = provider._process_desired_zone(desired)
+        self.assertEqual(1, len(result.records))
+
+    @patch('octodns_cloudflare.BaseProvider._process_desired_zone')
+    def test_flatten_cname_validation_non_boolean(self, mock_base):
+        mock_base.side_effect = lambda desired: desired
+        zone = Zone('unit.tests.', [])
+        desired = zone.copy()
+        desired.add_record(
+            Record.new(
+                zone,
+                'cname',
+                {
+                    'ttl': 300,
+                    'type': 'CNAME',
+                    'value': 'www.unit.tests.',
+                    'octodns': {'cloudflare': {'flatten_cname': 'yes'}},
+                },
+            )
+        )
+
+        provider = CloudflareProvider(
+            'test', 'email', 'token', strict_supports=True
+        )
+        with self.assertRaises(SupportsException) as ctx:
+            provider._process_desired_zone(desired)
+        self.assertIn('must be a boolean value', str(ctx.exception))
+
+        provider = CloudflareProvider(
+            'test', 'email', 'token', strict_supports=False
+        )
+        result = provider._process_desired_zone(desired)
+        self.assertEqual(1, len(result.records))
+        record = next(iter(result.records))
+        # The raw metadata still holds the authored value, but the provider
+        # treats it as absent so it is not serialized or used in change
+        # detection.
+        self.assertEqual('yes', record.octodns['cloudflare']['flatten_cname'])
+        self.assertIsNone(provider._record_flatten_cname(record))
 
     @patch('octodns_cloudflare.BaseProvider._process_desired_zone')
     def test_per_value_metadata_malformed(self, mock_base):
@@ -4733,3 +5439,135 @@ class TestCloudflareProvider(TestCase):
         provider.apply(plan)
         self.assertEqual(36, provider._request.call_count)
         provider._update_plan.assert_not_called()
+
+
+class TestCloudflareInternalProviderFlatten(TestCase):
+    ACCOUNT_ID = 'acct0000000000000000000000000001'
+
+    def _provider(self, strict_supports=True):
+        return CloudflareInternalProvider(
+            'test',
+            token='token',
+            account_id=self.ACCOUNT_ID,
+            retry_period=0,
+            strict_supports=strict_supports,
+        )
+
+    def test_record_for_ignores_flatten_cname(self):
+        provider = self._provider()
+        zone_records = [
+            {
+                'id': 'fc12ab34cd5611334422ab3322997642',
+                'type': 'CNAME',
+                'name': 'flatten.internal.tests',
+                'content': 'www.example.com',
+                'proxiable': True,
+                'proxied': False,
+                'ttl': 300,
+                'settings': {'flatten_cname': True},
+                'locked': False,
+                'zone_id': 'ff12ab34cd5611334422ab3322997650',
+                'zone_name': 'internal.tests',
+                'modified_on': '2017-03-11T18:01:43.420689Z',
+                'created_on': '2017-03-11T18:01:43.420689Z',
+                'meta': {'auto_added': False},
+            }
+        ]
+
+        zone = Zone('internal.tests.', [])
+        record = provider._record_for(
+            zone, 'flatten', 'CNAME', zone_records, False
+        )
+
+        self.assertNotIn('flatten_cname', record.octodns.get('cloudflare', {}))
+
+    def test_gendata_no_flatten_cname(self):
+        provider = self._provider()
+        zone = Zone('internal.tests.', [])
+        record = set_record_flatten_cname_flag(
+            Record.new(
+                zone,
+                'cname',
+                {'ttl': 300, 'type': 'CNAME', 'value': 'www.example.com.'},
+            ),
+            True,
+        )
+
+        data = next(provider._gen_data(record))
+
+        self.assertNotIn('settings', data)
+
+    @patch('octodns_cloudflare.BaseProvider._process_desired_zone')
+    def test_process_desired_zone_rejects_flatten_cname_strict(self, mock_base):
+        mock_base.side_effect = lambda desired: desired
+        zone = Zone('internal.tests.', [])
+        desired = zone.copy()
+        desired.add_record(
+            Record.new(
+                zone,
+                'cname',
+                {
+                    'ttl': 300,
+                    'type': 'CNAME',
+                    'value': 'www.example.com.',
+                    'octodns': {'cloudflare': {'flatten_cname': True}},
+                },
+            )
+        )
+
+        provider = self._provider(strict_supports=True)
+        with self.assertRaises(SupportsException) as ctx:
+            provider._process_desired_zone(desired)
+        self.assertIn('CloudflareInternalProvider', str(ctx.exception))
+        self.assertIn('not supported by', str(ctx.exception))
+
+    @patch('octodns_cloudflare.BaseProvider._process_desired_zone')
+    def test_process_desired_zone_ignores_flatten_cname_lenient(
+        self, mock_base
+    ):
+        mock_base.side_effect = lambda desired: desired
+        zone = Zone('internal.tests.', [])
+        desired = zone.copy()
+        desired.add_record(
+            Record.new(
+                zone,
+                'cname',
+                {
+                    'ttl': 300,
+                    'type': 'CNAME',
+                    'value': 'www.example.com.',
+                    'octodns': {'cloudflare': {'flatten_cname': True}},
+                },
+            )
+        )
+
+        provider = self._provider(strict_supports=False)
+        result = provider._process_desired_zone(desired)
+        self.assertEqual(1, len(result.records))
+
+    def test_extra_changes_ignores_flatten_cname(self):
+        provider = self._provider()
+        existing = Zone('internal.tests.', [])
+        existing_record = Record.new(
+            existing,
+            'cname',
+            {'ttl': 300, 'type': 'CNAME', 'value': 'www.example.com.'},
+        )
+        existing.add_record(existing_record)
+
+        desired = Zone('internal.tests.', [])
+        desired_record = set_record_flatten_cname_flag(
+            Record.new(
+                desired,
+                'cname',
+                {'ttl': 300, 'type': 'CNAME', 'value': 'www.example.com.'},
+            ),
+            True,
+        )
+        desired.add_record(desired_record)
+
+        extra_changes = provider._extra_changes(
+            existing, desired, [Update(existing_record, desired_record)]
+        )
+
+        self.assertEqual(0, len(extra_changes))
