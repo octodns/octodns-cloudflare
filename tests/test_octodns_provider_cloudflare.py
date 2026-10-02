@@ -125,6 +125,17 @@ class TestCloudflareProvider(TestCase):
             self.assertEqual('CloudflareError', type(ctx.exception).__name__)
             self.assertEqual('request was invalid', str(ctx.exception))
 
+        # Bad requests, non-JSON resp
+        with requests_mock() as mock:
+            mock.get(ANY, status_code=400, text='<html>bad request</html>')
+
+            with self.assertRaises(Exception) as ctx:
+                zone = Zone('unit.tests.', [])
+                provider.populate(zone)
+
+            self.assertEqual('CloudflareError', type(ctx.exception).__name__)
+            self.assertEqual('Cloudflare error', str(ctx.exception))
+
         # Bad auth
         with requests_mock() as mock:
             mock.get(
@@ -148,6 +159,18 @@ class TestCloudflareProvider(TestCase):
         # Bad auth, unknown resp
         with requests_mock() as mock:
             mock.get(ANY, status_code=403, text='{}')
+
+            with self.assertRaises(Exception) as ctx:
+                zone = Zone('unit.tests.', [])
+                provider.populate(zone)
+            self.assertEqual(
+                'CloudflareAuthenticationError', type(ctx.exception).__name__
+            )
+            self.assertEqual('Cloudflare error', str(ctx.exception))
+
+        # Bad auth, empty body
+        with requests_mock() as mock:
+            mock.get(ANY, status_code=403, text='')
 
             with self.assertRaises(Exception) as ctx:
                 zone = Zone('unit.tests.', [])
@@ -194,6 +217,19 @@ class TestCloudflareProvider(TestCase):
         # Rate Limit error, unknown resp
         with requests_mock() as mock:
             mock.get(ANY, status_code=429, text='{}')
+
+            with self.assertRaises(Exception) as ctx:
+                zone = Zone('unit.tests.', [])
+                provider.populate(zone)
+
+            self.assertEqual(
+                'CloudflareRateLimitError', type(ctx.exception).__name__
+            )
+            self.assertEqual('Cloudflare error', str(ctx.exception))
+
+        # Rate Limit error, empty body
+        with requests_mock() as mock:
+            mock.get(ANY, status_code=429, text='')
 
             with self.assertRaises(Exception) as ctx:
                 zone = Zone('unit.tests.', [])

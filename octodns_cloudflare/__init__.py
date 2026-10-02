@@ -205,6 +205,14 @@ class CloudflareProvider(BaseProvider):
                 )
                 sleep(self.retry_period)
 
+    def _error_data(self, resp):
+        # Cloudflare sometimes returns error responses with an empty or
+        # non-JSON body, for example a 429 with no content
+        try:
+            return resp.json()
+        except ValueError:
+            return {}
+
     def _request(self, method, path, params=None, data=None):
         self.log.debug('_request: method=%s, path=%s', method, path)
 
@@ -215,11 +223,11 @@ class CloudflareProvider(BaseProvider):
         self.log.debug('_request:   status=%d', resp.status_code)
         if resp.status_code == 400:
             self.log.debug('_request:   data=%s', data)
-            raise CloudflareError(resp.json())
+            raise CloudflareError(self._error_data(resp))
         if resp.status_code == 403:
-            raise CloudflareAuthenticationError(resp.json())
+            raise CloudflareAuthenticationError(self._error_data(resp))
         if resp.status_code == 429:
-            raise CloudflareRateLimitError(resp.json())
+            raise CloudflareRateLimitError(self._error_data(resp))
         if resp.status_code in [502, 503]:
             raise Cloudflare5xxError("http 5xx")
         resp.raise_for_status()
