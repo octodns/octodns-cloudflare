@@ -19,6 +19,7 @@ from octodns.record import Create, Delete, Record, Update
 from octodns.zone import Zone
 
 from octodns_cloudflare import (
+    Cloudflare5xxError,
     CloudflareAuthenticationError,
     CloudflareInternalProvider,
     CloudflareProvider,
@@ -3670,7 +3671,24 @@ class TestCloudflareProvider(TestCase):
         ]
         with self.assertRaises(CloudflareRateLimitError) as ctx:
             provider.zone_records(zone)
-            self.assertEqual('last', str(ctx.exception))
+        self.assertEqual('last', str(ctx.exception))
+        # the first attempt plus retry_count (4) retries
+        self.assertEqual(5, provider._request.call_count)
+
+        # Exhaust 5xx retries, shares retry_count with rate limits
+        provider._zones = None
+        provider._request.reset_mock()
+        provider._request.side_effect = [
+            Cloudflare5xxError({"errors": [{"message": "first"}]}),
+            Cloudflare5xxError({"errors": [{"message": "boo"}]}),
+            Cloudflare5xxError({"errors": [{"message": "boo"}]}),
+            Cloudflare5xxError({"errors": [{"message": "boo"}]}),
+            Cloudflare5xxError({"errors": [{"message": "last"}]}),
+        ]
+        with self.assertRaises(Cloudflare5xxError) as ctx:
+            provider.zone_records(zone)
+        self.assertEqual('last', str(ctx.exception))
+        self.assertEqual(5, provider._request.call_count)
 
         # Exhaust auth retries
         provider._zones = None
@@ -3682,7 +3700,9 @@ class TestCloudflareProvider(TestCase):
         ]
         with self.assertRaises(CloudflareAuthenticationError) as ctx:
             provider.zone_records(zone)
-            self.assertEqual('last', str(ctx.exception))
+        self.assertEqual('last', str(ctx.exception))
+        # the first attempt plus auth_error_retry_count (2) retries
+        self.assertEqual(3, provider._request.call_count)
 
         # Test with auth retries disabled (default behavior)
         provider = CloudflareProvider(

@@ -172,7 +172,7 @@ class CloudflareProvider(BaseProvider):
             try:
                 return self._request(*args, **kwargs)
             except CloudflareRateLimitError:
-                if tries <= 1:
+                if tries <= 0:
                     raise
                 tries -= 1
                 self.log.warning(
@@ -198,7 +198,7 @@ class CloudflareProvider(BaseProvider):
                     raise
                 tries -= 1
                 self.log.warning(
-                    'http 502 error encountered, pausing '
+                    'http 5xx error encountered, pausing '
                     'for %ds and trying again, %d remaining',
                     self.retry_period,
                     tries,

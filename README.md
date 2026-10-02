@@ -57,8 +57,8 @@ providers:
     # Optional. Define Cloudflare plan type for the zones. Default: free,
     # options: free, pro, business, enterprise
     #plan_type: free
-    # Optional. Default: 4. Number of times to retry if a 429 response
-    # is received.
+    # Optional. Default: 4. Number of times to retry if a 429, 502, or 503
+    # response is received. These responses share a single retry count.
     #retry_count: 4
     # Optional. Default: 0. Number of times to retry if a 403 response
     # is received.
