@@ -3,8 +3,11 @@
 #
 
 from collections import defaultdict
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from io import StringIO
 from logging import getLogger
+from math import ceil
 from time import sleep
 from urllib.parse import urlsplit
 
@@ -46,8 +49,32 @@ class CloudflareAuthenticationError(CloudflareError):
 
 class CloudflareRateLimitError(CloudflareError):
 
-    def __init__(self, data):
+    def __init__(self, data, retry_after=None):
         CloudflareError.__init__(self, data)
+        self.retry_after = retry_after
+
+
+def _parse_retry_after(value):
+    '''
+    Return the number of seconds to wait from a Retry-After header value,
+    which is either a number of seconds or an HTTP-date, or None if the
+    value is missing or invalid.
+    '''
+    if value is None:
+        return None
+    try:
+        seconds = int(value)
+    except ValueError:
+        try:
+            when = parsedate_to_datetime(value)
+        except (TypeError, ValueError):
+            return None
+        if when.tzinfo is None:
+            # RFC 2822 dates with a -0000 offset parse as naive, treat as UTC
+            when = when.replace(tzinfo=timezone.utc)
+        delta = (when - datetime.now(timezone.utc)).total_seconds()
+        return max(0, ceil(delta))
+    return seconds if seconds >= 0 else None
 
 
 class Cloudflare5xxError(CloudflareError):
@@ -171,17 +198,22 @@ class CloudflareProvider(BaseProvider):
         while True:  # We'll raise to break after our tries expire
             try:
                 return self._request(*args, **kwargs)
-            except CloudflareRateLimitError:
+            except CloudflareRateLimitError as e:
                 if tries <= 0:
                     raise
                 tries -= 1
+                period = (
+                    e.retry_after
+                    if e.retry_after is not None
+                    else self.retry_period
+                )
                 self.log.warning(
                     'rate limit encountered, pausing '
                     'for %ds and trying again, %d remaining',
-                    self.retry_period,
+                    period,
                     tries,
                 )
-                sleep(self.retry_period)
+                sleep(period)
             except CloudflareAuthenticationError:
                 if auth_tries <= 0:
                     raise
@@ -227,7 +259,10 @@ class CloudflareProvider(BaseProvider):
         if resp.status_code == 403:
             raise CloudflareAuthenticationError(self._error_data(resp))
         if resp.status_code == 429:
-            raise CloudflareRateLimitError(self._error_data(resp))
+            raise CloudflareRateLimitError(
+                self._error_data(resp),
+                retry_after=_parse_retry_after(resp.headers.get('Retry-After')),
+            )
         if resp.status_code in [502, 503]:
             raise Cloudflare5xxError("http 5xx")
         resp.raise_for_status()

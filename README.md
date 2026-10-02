@@ -63,7 +63,9 @@ providers:
     # Optional. Default: 0. Number of times to retry if a 403 response
     # is received.
     #auth_error_retry_count: 0
-    # Optional. Default: 300. Number of seconds to wait before retrying.
+    # Optional. Default: 300. Number of seconds to wait before retrying. For
+    # 429 responses, this is used only when Cloudflare doesn't send a
+    # Retry-After header.
     #retry_period: 300
     # Optional. Default: 50. Number of zones per page.
     #zones_per_page: 50

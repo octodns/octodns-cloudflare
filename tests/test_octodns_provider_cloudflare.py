@@ -2,6 +2,7 @@
 #
 #
 
+from datetime import datetime, timezone
 from os.path import dirname, join
 from unittest import TestCase, skipIf
 from unittest.mock import Mock, call, patch
@@ -24,6 +25,7 @@ from octodns_cloudflare import (
     CloudflareInternalProvider,
     CloudflareProvider,
     CloudflareRateLimitError,
+    _parse_retry_after,
 )
 
 octodns_supports_meta = tuple(int(p) for p in octodns_version.split('.')) >= (
@@ -240,6 +242,21 @@ class TestCloudflareProvider(TestCase):
                 'CloudflareRateLimitError', type(ctx.exception).__name__
             )
             self.assertEqual('Cloudflare error', str(ctx.exception))
+            self.assertIsNone(ctx.exception.retry_after)
+
+        # Rate Limit error, Retry-After header
+        with requests_mock() as mock:
+            mock.get(
+                ANY, status_code=429, text='', headers={'Retry-After': '17'}
+            )
+
+            with patch('octodns_cloudflare.sleep') as sleep_mock:
+                with self.assertRaises(CloudflareRateLimitError) as ctx:
+                    zone = Zone('unit.tests.', [])
+                    provider.populate(zone)
+
+            self.assertEqual(17, ctx.exception.retry_after)
+            sleep_mock.assert_called_with(17)
 
         # 502/503 error, Cloudflare API issue
         with requests_mock() as mock:
@@ -3714,6 +3731,66 @@ class TestCloudflareProvider(TestCase):
         with self.assertRaises(CloudflareAuthenticationError):
             provider.zone_records(zone)
         self.assertEqual(1, provider._request.call_count)
+
+    @patch('octodns_cloudflare.sleep')
+    def test_retry_after(self, sleep_mock):
+        provider = CloudflareProvider('test', 'email', 'token', retry_period=42)
+        result = {"result": [], "result_info": {"count": 1, "per_page": 50}}
+        zone = Zone('unit.tests.', [])
+        provider._request = Mock()
+
+        # Retry-After provided, used instead of retry_period
+        provider._request.side_effect = [
+            CloudflareRateLimitError({}, retry_after=7),
+            result,
+        ]
+        self.assertEqual([], provider.zone_records(zone))
+        sleep_mock.assert_called_once_with(7)
+
+        # Retry-After of zero is honored
+        provider._zones = None
+        sleep_mock.reset_mock()
+        provider._request.side_effect = [
+            CloudflareRateLimitError({}, retry_after=0),
+            result,
+        ]
+        self.assertEqual([], provider.zone_records(zone))
+        sleep_mock.assert_called_once_with(0)
+
+        # No Retry-After, falls back to retry_period
+        provider._zones = None
+        sleep_mock.reset_mock()
+        provider._request.side_effect = [CloudflareRateLimitError({}), result]
+        self.assertEqual([], provider.zone_records(zone))
+        sleep_mock.assert_called_once_with(42)
+
+    def test_parse_retry_after(self):
+        # missing
+        self.assertIsNone(_parse_retry_after(None))
+        # seconds
+        self.assertEqual(0, _parse_retry_after('0'))
+        self.assertEqual(30, _parse_retry_after('30'))
+        # negative seconds are invalid
+        self.assertIsNone(_parse_retry_after('-5'))
+        # garbage
+        self.assertIsNone(_parse_retry_after('soon'))
+        self.assertIsNone(_parse_retry_after(''))
+
+        now = datetime(2026, 10, 2, 12, 0, 0, tzinfo=timezone.utc)
+        with patch('octodns_cloudflare.datetime') as datetime_mock:
+            datetime_mock.now.return_value = now
+            # HTTP-date in the future
+            self.assertEqual(
+                90, _parse_retry_after('Fri, 02 Oct 2026 12:01:30 GMT')
+            )
+            # HTTP-date with a -0000 offset parses as naive, treated as UTC
+            self.assertEqual(
+                90, _parse_retry_after('Fri, 02 Oct 2026 12:01:30 -0000')
+            )
+            # HTTP-date in the past is clamped to zero
+            self.assertEqual(
+                0, _parse_retry_after('Fri, 02 Oct 2026 11:00:00 GMT')
+            )
 
     def test_ttl_mapping(self):
         provider = CloudflareProvider('test', 'email', 'token')
