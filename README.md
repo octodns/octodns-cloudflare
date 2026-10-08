@@ -95,14 +95,18 @@ providers:
 
 The provider sends DNS record creates, updates, and deletes to Cloudflare's [batch API](https://developers.cloudflare.com/dns/manage-dns-records/how-to/batch-record-changes/), up to `batch_size` operations per request. Page Rules (URLFWD) and Regional Services are still written with individual requests.
 
-Cloudflare runs each request in a single transaction: its deletes, then updates, then creates. If any operation fails, none of the operations in that request are applied. An apply larger than `batch_size` is split across several requests, and those aren't atomic together:
+Cloudflare runs each request in a single transaction: its deletes, then updates, then creates. If any operation fails, none of the operations in that request are applied.
 
-- An apply can fail partway, with earlier requests applied and later ones not. Plan again before you retry so that the plan reflects the zone's current state.
-- An update that removes some values and adds others can have its removals in one request and its additions in a later one. Between those requests, the record has fewer values, or none.
+Each value of a record is a separate operation, so a record with four values takes four operations. An apply with more than `batch_size` operations is split across several requests, and those requests aren't atomic together:
 
-Creating a DS record together with the NS records for its name always takes a separate request: Cloudflare only accepts a DS when its NS records already exist, so those DS records are sent after the rest of the batch.
+- **Partial applies:** an apply can fail partway, with earlier requests applied and later ones not. Plan again before you retry so that the plan reflects the zone's current state.
+- **Changes to one record can be split:** a single record's operations can land in different requests. Between those requests, the record is partly changed. An update can have its removals in one request and its additions in a later one, leaving the record with fewer values, or none, until the later request runs.
 
-To avoid both, set `batch_size` high enough that typical applies fit in one request. Cloudflare limits a request to 200 operations on Free plans and 3,500 on Pro, Business, and Enterprise plans. The default of 200 works on every plan.
+The provider always sends every delete in the apply before any update, and every update before any create, across all requests. A create that depends on a delete is therefore never sent first. For example, a CNAME replaced by an A record at the same name works however the apply is split.
+
+Creating a DS record together with the NS records for its name always takes a separate request. Cloudflare only accepts a DS when its NS records already exist, so those DS records are sent after the rest of the batch.
+
+To keep typical applies in one atomic request, set `batch_size` high enough to fit them. Cloudflare limits a request to 200 operations on Free plans and 3,500 on Pro, Business, and Enterprise plans. The default of 200 works on every plan.
 
 #### Internal DNS zones (`CloudflareInternalProvider`)
 
