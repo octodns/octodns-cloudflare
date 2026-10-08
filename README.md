@@ -86,6 +86,20 @@ providers:
     #
     # See: https://developers.cloudflare.com/dns/nameservers/nameserver-options/#multi-provider-dns
     #multi_provider: false
+    # Optional. Default: false. Apply ordinary DNS record changes with
+    # POST dns_records/batch requests instead of one request per record
+    # write. Requests are chunked at 200 operations (deletes, puts, and
+    # posts combined), the per-request limit valid on all plans. Public DNS
+    # only: page rule (URLFWD) writes are never batched, and
+    # CloudflareInternalProvider rejects the option.
+    #
+    # Cloudflare executes a batch as deletes, then puts, then posts, and one
+    # apply may span several batch requests. Each batch request is a single
+    # database transaction, but edge propagation and an apply spanning
+    # multiple batch requests are not atomic, so a failed apply can leave
+    # changes partially applied. When a batch apply fails, replan against
+    # fresh state rather than re-running the same apply blindly.
+    #batch_records: false
 ```
 
 #### Internal DNS zones (`CloudflareInternalProvider`)
@@ -119,7 +133,7 @@ zones:
 Notes and constraints:
 
 - **Zones must pre-exist** in Cloudflare. The provider does not auto-create internal zones (create them in the dashboard or via `POST /zones` with `type: "internal"`, then link to a view).
-- **Not supported** (`cdn`, `pagerules`, `plan_type`) — passing any of these to `CloudflareInternalProvider` raises an error. Cloudflare internal zones have no proxy, no pagerules, and no plan tier.
+- **Not supported** (`cdn`, `pagerules`, `plan_type`, `batch_records`) — passing any of these to `CloudflareInternalProvider` raises an error. Cloudflare internal zones have no proxy, no pagerules, and no plan tier; `batch_records` applies to the public DNS path only, and this provider does not enable `dns_records/batch` on internal zones.
 - **Root NS records are stripped** before apply, with a warning logged. Internal zones have no nameservers (Cloudflare Gateway resolves them directly), so root NS records are never meaningful on this zone type. You can leave `NS` records in a shared YAML source without reconfiguring `strict_supports`.
 - **Zone enumeration is hybrid by default**: the provider takes the union of `GET /zones?account.id=…` (filtered to `type=="internal"`) and a walk of the account's DNS views (`GET /accounts/{account_id}/dns_settings/views` → each view's `zones[]` → `GET /zones/{zone_id}` to hydrate names). Setting `view_id` narrows enumeration to a single view.
 - **Required token scopes**: Account: DNS Views (Edit), Account: Account Settings (Edit), Zone: Zone (Read), Zone: DNS (Edit), Zone: DNS Settings (Edit). Include the account in Account Resources and the internal zones in Zone Resources.
