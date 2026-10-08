@@ -392,7 +392,7 @@ class TestCloudflareProvider(TestCase):
             {'result': {'id': 42}},  # zone create
         ] + [
             None
-        ] * 34  # individual record creates
+        ] * 35  # pagerule creates and dns record batches
 
         # non-existent zone, create everything
         plan = provider.plan(self.expected)
@@ -438,13 +438,32 @@ class TestCloudflareProvider(TestCase):
             True,
         )
         # expected number of total calls
-        self.assertEqual(5, provider._request.call_count)
-        # all of the dns records went out in a single batch
+        self.assertEqual(6, provider._request.call_count)
+        # the dns records went out in a single batch, except the DS whose NS
+        # is created in that batch, Cloudflare requires the NS exist first
         batches = batch_requests(provider)
-        self.assertEqual(1, len(batches))
+        self.assertEqual(2, len(batches))
         self.assertEqual(['posts'], list(batches[0].keys()))
         posts = batches[0]['posts']
-        self.assertEqual(32, len(posts))
+        self.assertEqual(31, len(posts))
+        self.assertEqual(
+            {
+                'posts': [
+                    {
+                        'data': {
+                            'algorithm': 13,
+                            'digest': 'b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c',
+                            'digest_type': 2,
+                            'key_tag': 1,
+                        },
+                        'type': 'DS',
+                        'name': 'ds.unit.tests',
+                        'ttl': 300,
+                    }
+                ]
+            },
+            batches[1],
+        )
         # created at least one of the record with expected data
         self.assertIn(
             {
@@ -758,7 +777,7 @@ class TestCloudflareProvider(TestCase):
             True,
         )
         # expected number of total calls
-        self.assertEqual(5, provider._request.call_count)
+        self.assertEqual(6, provider._request.call_count)
 
         # Creating new zone with plan_type
         provider = CloudflareProvider(
@@ -778,7 +797,7 @@ class TestCloudflareProvider(TestCase):
             {'result': {'plan': {'legacy_id': 'enterprise'}}},  # plan update
         ] + [
             self.empty
-        ] * 3  # 2 pagerule creates and the record batch
+        ] * 4  # 2 pagerule creates and 2 record batches
 
         # non-existent zone, create everything
         plan = provider.plan(self.expected)
@@ -798,7 +817,7 @@ class TestCloudflareProvider(TestCase):
                 },
             )
         ]
-        request_call_count = 5
+        request_call_count = 6
         if octodns_supports_meta:
             request_call_count += 2
             expected.extend(
@@ -834,7 +853,7 @@ class TestCloudflareProvider(TestCase):
             {'result': {'id': 42, 'name_servers': ['foo']}},  # zone create
         ] + [
             self.empty
-        ] * 3  # 2 pagerule creates and the record batch
+        ] * 4  # 2 pagerule creates and 2 record batches
 
         # non-existent zone, create everything
         plan = provider.plan(self.expected)
@@ -871,7 +890,7 @@ class TestCloudflareProvider(TestCase):
             batch_requests(provider)[0]['posts'],
         )
         # expected number of total calls
-        self.assertEqual(5, provider._request.call_count)
+        self.assertEqual(6, provider._request.call_count)
 
         # Plan update when current plan differs
         provider = CloudflareProvider(
@@ -900,13 +919,13 @@ class TestCloudflareProvider(TestCase):
             {'result': {'plan': {'legacy_id': 'enterprise'}}},
         ] + [
             self.empty
-        ] * 3  # 2 pagerule creates and the record batch
+        ] * 4  # 2 pagerule creates and 2 record batches
 
         plan = provider.plan(self.expected)
         self.assertEqual(22, len(plan.changes))
         self.assertEqual(22, provider.apply(plan))
 
-        request_call_count = 5
+        request_call_count = 6
         expected = [
             # Get existing records
             call(
@@ -5734,13 +5753,13 @@ class TestCloudflareProvider(TestCase):
         provider._request = Mock()
         provider._request.side_effect = [
             self.empty
-        ] * 5  # 2 gets, 2 pagerules, 1 batch
+        ] * 6  # 2 gets, 2 pagerules, 2 batches
         provider.log = Mock()
 
         plan = provider.plan(self.expected)
         delattr(plan, 'meta')  # Remove meta attribute to simulate older octodns
         provider.apply(plan)
-        self.assertEqual(5, provider._request.call_count)
+        self.assertEqual(6, provider._request.call_count)
         provider._update_plan.assert_not_called()
 
         provider.log.warning.assert_called_once_with(
@@ -5761,12 +5780,12 @@ class TestCloudflareProvider(TestCase):
         }
         provider._update_plan = Mock()
         provider._request = Mock()
-        provider._request.side_effect = [self.empty] * 5
+        provider._request.side_effect = [self.empty] * 6
 
         plan = provider.plan(self.expected)
         plan.meta = {}  # Override meta to be empty
         provider.apply(plan)
-        self.assertEqual(5, provider._request.call_count)
+        self.assertEqual(6, provider._request.call_count)
         provider._update_plan.assert_not_called()
 
         # Meta without cloudflare_plan
@@ -5782,12 +5801,12 @@ class TestCloudflareProvider(TestCase):
         }
         provider._update_plan = Mock()
         provider._request = Mock()
-        provider._request.side_effect = [self.empty] * 5
+        provider._request.side_effect = [self.empty] * 6
 
         plan = provider.plan(self.expected)
         plan.meta = {'other_key': 'value'}  # Override meta with unrelated data
         provider.apply(plan)
-        self.assertEqual(5, provider._request.call_count)
+        self.assertEqual(6, provider._request.call_count)
         provider._update_plan.assert_not_called()
 
         # Meta with cloudflare_plan but no desired plan
@@ -5803,12 +5822,12 @@ class TestCloudflareProvider(TestCase):
         }
         provider._update_plan = Mock()
         provider._request = Mock()
-        provider._request.side_effect = [self.empty] * 5
+        provider._request.side_effect = [self.empty] * 6
 
         plan = provider.plan(self.expected)
         plan.meta = {'cloudflare_plan': {'current': 'pro'}}  # No desired plan
         provider.apply(plan)
-        self.assertEqual(5, provider._request.call_count)
+        self.assertEqual(6, provider._request.call_count)
         provider._update_plan.assert_not_called()
 
     def test_batch_size(self):
@@ -5864,6 +5883,50 @@ class TestCloudflareProvider(TestCase):
             'ttl': 300,
             'locked': False,
         }
+
+    def test_apply_batch_defers_ds_after_new_ns(self):
+        provider = self._batch_provider([])
+        ds = {
+            'type': 'DS',
+            'ttl': 300,
+            'value': {
+                'key_tag': 1,
+                'algorithm': 13,
+                'digest_type': 2,
+                'digest': 'ab' * 32,
+            },
+        }
+        zone = Zone('unit.tests.', [])
+        plan = Plan(
+            zone,
+            zone,
+            [
+                # new delegation, the DS has to wait for its NS
+                Create(Record.new(zone, 'new', ds)),
+                Create(
+                    Record.new(
+                        zone,
+                        'new',
+                        {'type': 'NS', 'ttl': 300, 'value': 'ns1.unit.tests.'},
+                    )
+                ),
+                # DS added to an existing delegation goes in the main batch
+                Create(Record.new(zone, 'old', ds)),
+            ],
+            True,
+        )
+        provider._apply(plan)
+
+        batches = batch_requests(provider)
+        self.assertEqual(2, len(batches))
+        self.assertEqual(
+            [('NS', 'new.unit.tests'), ('DS', 'old.unit.tests')],
+            [(p['type'], p['name']) for p in batches[0]['posts']],
+        )
+        self.assertEqual(
+            [('DS', 'new.unit.tests')],
+            [(p['type'], p['name']) for p in batches[1]['posts']],
+        )
 
     def test_apply_batch_chunking(self):
         provider = self._batch_provider(

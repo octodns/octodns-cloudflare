@@ -100,6 +100,8 @@ Cloudflare runs each request in a single transaction: its deletes, then updates,
 - An apply can fail partway, with earlier requests applied and later ones not. Plan again before you retry so that the plan reflects the zone's current state.
 - An update that removes some values and adds others can have its removals in one request and its additions in a later one. Between those requests, the record has fewer values, or none.
 
+Creating a DS record together with the NS records for its name always takes a separate request: Cloudflare only accepts a DS when its NS records already exist, so those DS records are sent after the rest of the batch.
+
 To avoid both, set `batch_size` high enough that typical applies fit in one request. Cloudflare limits a request to 200 operations on Free plans and 3,500 on Pro, Business, and Enterprise plans. The default of 200 works on every plan.
 
 #### Internal DNS zones (`CloudflareInternalProvider`)

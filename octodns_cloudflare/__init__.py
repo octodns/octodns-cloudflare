@@ -1887,12 +1887,28 @@ class CloudflareProvider(BaseProvider):
         Cloudflare runs each request's deletes, then puts, then posts, in a
         single transaction. The ops are cut into requests in that same order,
         so it also holds across requests. Only a single request is atomic.
+
+        Cloudflare checks a DS post against the NS records that exist before
+        the request, not ones posted in the same request, so DS posts for
+        names that are getting NS posts go in later requests of their own.
         '''
-        ordered = [
-            (kind, op)
-            for kind in ('deletes', 'puts', 'posts')
-            for op in ops[kind]
-        ]
+        ns_names = {op['name'] for op in ops['posts'] if op['type'] == 'NS'}
+        posts = []
+        ds_posts = []
+        for op in ops['posts']:
+            if op['type'] == 'DS' and op['name'] in ns_names:
+                ds_posts.append(op)
+            else:
+                posts.append(op)
+        ordered = (
+            [('deletes', op) for op in ops['deletes']]
+            + [('puts', op) for op in ops['puts']]
+            + [('posts', op) for op in posts]
+        )
+        self._send_batches(zone_id, ordered)
+        self._send_batches(zone_id, [('posts', op) for op in ds_posts])
+
+    def _send_batches(self, zone_id, ordered):
         path = f'/zones/{zone_id}/dns_records/batch'
         for start in range(0, len(ordered), self.batch_size):
             batch = defaultdict(list)
