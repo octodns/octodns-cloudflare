@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 from requests import Session
 
 from octodns import __VERSION__ as octodns_version
-from octodns.idna import IdnaDict
+from octodns.idna import IdnaDict, idna_encode
 from octodns.provider import ProviderException, SupportsException
 from octodns.provider.base import BaseProvider
 from octodns.record import Create, Record, Update
@@ -184,6 +184,7 @@ class CloudflareProvider(BaseProvider):
 
         self._zones = None
         self._zone_records = {}
+        self._zone_record_index = {}
         self._zone_regional_hostnames = {}
         if self.pagerules:
             # copy the class static/ever present list of supported types into
@@ -1657,6 +1658,36 @@ class CloudflareProvider(BaseProvider):
         for content in self._gen_data(new):
             self._try_request('POST', path, data=content)
 
+    def _pagerule_uri(self, record):
+        uri = record['targets'][0]['constraint']['value']
+        uri = '//' + uri if not uri.startswith('http') else uri
+        return urlsplit(uri)
+
+    def _zone_records_named(self, zone, fqdn):
+        '''
+        Return the zone's existing Cloudflare records (DNS records and
+        pagerules) whose name matches ``fqdn``, in zone_records order.
+
+        Matching uses the normalized (IDNA-encoded, lowercased) name, so the
+        result is a superset of what callers match on. Callers still apply
+        their own name and type checks. The index is built once per
+        zone_records list instead of scanning every record for every change,
+        and it's rebuilt whenever zone_records returns a different list.
+        '''
+        records = self.zone_records(zone)
+        cached = self._zone_record_index.get(zone.name)
+        if cached is None or cached[0] is not records:
+            index = defaultdict(list)
+            for record in records:
+                if 'targets' in record:
+                    name = self._pagerule_uri(record).netloc
+                else:
+                    name = record['name']
+                index[idna_encode(name)].append(record)
+            cached = (records, index)
+            self._zone_record_index[zone.name] = cached
+        return cached[1].get(idna_encode(fqdn), [])
+
     def _apply_Update(self, change):
         zone = change.new.zone
         zone_id = self.zones[zone.name]['id']
@@ -1665,11 +1696,9 @@ class CloudflareProvider(BaseProvider):
 
         existing = {}
         # Find all of the existing CF records for this name & type
-        for record in self.zone_records(zone):
+        for record in self._zone_records_named(zone, change.new.fqdn[:-1]):
             if 'targets' in record:
-                uri = record['targets'][0]['constraint']['value']
-                uri = '//' + uri if not uri.startswith('http') else uri
-                parsed_uri = urlsplit(uri)
+                parsed_uri = self._pagerule_uri(record)
                 name = zone.hostname_from_fqdn(parsed_uri.netloc)
                 path = parsed_uri.path
                 # assumption, actions will always contain 1 action
@@ -1805,12 +1834,9 @@ class CloudflareProvider(BaseProvider):
         # Make sure to map ALIAS to CNAME when looking for the target to delete
         existing_type = 'CNAME' if existing._type == 'ALIAS' else existing._type
         zone_id = self.zones[existing.zone.name]['id']
-        for record in self.zone_records(existing.zone):
+        for record in self._zone_records_named(existing.zone, existing_name):
             if 'targets' in record and self.pagerules:
-                uri = record['targets'][0]['constraint']['value']
-                uri = '//' + uri if not uri.startswith('http') else uri
-                parsed_uri = urlsplit(uri)
-                record_name = parsed_uri.netloc
+                record_name = self._pagerule_uri(record).netloc
                 record_type = 'URLFWD'
                 if (
                     existing_name == record_name
@@ -1958,6 +1984,7 @@ class CloudflareProvider(BaseProvider):
 
         # clear the cache
         self._zone_records.pop(zone_name, None)
+        self._zone_record_index.pop(zone_name, None)
         self._zone_regional_hostnames.pop(zone_name, None)
 
     def _extra_changes(self, existing, desired, changes):
