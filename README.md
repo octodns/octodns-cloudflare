@@ -86,7 +86,21 @@ providers:
     #
     # See: https://developers.cloudflare.com/dns/nameservers/nameserver-options/#multi-provider-dns
     #multi_provider: false
+    # Optional. Default: 200. Maximum number of DNS record operations sent in
+    # each dns_records/batch request. See "Applying changes" below.
+    #batch_size: 200
 ```
+
+#### Applying changes
+
+The provider sends DNS record creates, updates, and deletes to Cloudflare's [batch API](https://developers.cloudflare.com/dns/manage-dns-records/how-to/batch-record-changes/), up to `batch_size` operations per request. Page Rules (URLFWD) and Regional Services are still written with individual requests.
+
+Cloudflare runs each request in a single transaction: its deletes, then updates, then creates. If any operation fails, none of the operations in that request are applied. An apply larger than `batch_size` is split across several requests, and those aren't atomic together:
+
+- An apply can fail partway, with earlier requests applied and later ones not. Plan again before you retry so that the plan reflects the zone's current state.
+- An update that removes some values and adds others can have its removals in one request and its additions in a later one. Between those requests, the record has fewer values, or none.
+
+To avoid both, set `batch_size` high enough that typical applies fit in one request. Cloudflare limits a request to 200 operations on Free plans and 3,500 on Pro, Business, and Enterprise plans. The default of 200 works on every plan.
 
 #### Internal DNS zones (`CloudflareInternalProvider`)
 

@@ -39,6 +39,10 @@ class CloudflareError(ProviderException):
         except (IndexError, KeyError, TypeError):
             message = 'Cloudflare error'
         super().__init__(message)
+        try:
+            self.errors = data['errors']
+        except (KeyError, TypeError):
+            self.errors = []
 
 
 class CloudflareAuthenticationError(CloudflareError):
@@ -140,6 +144,7 @@ class CloudflareProvider(BaseProvider):
         timeout=TIMEOUT,
         api_url="https://api.cloudflare.com/client/v4",
         multi_provider=False,
+        batch_size=200,
         *args,
         **kwargs,
     ):
@@ -153,6 +158,15 @@ class CloudflareProvider(BaseProvider):
             plan_type,
         )
         super().__init__(id, *args, **kwargs)
+
+        if (
+            not isinstance(batch_size, int)
+            or isinstance(batch_size, bool)
+            or batch_size < 1
+        ):
+            raise ProviderException(
+                f'{id}: batch_size must be a positive integer, got {batch_size!r}'
+            )
 
         sess = Session()
         if email and token:
@@ -181,6 +195,7 @@ class CloudflareProvider(BaseProvider):
         self._sess = sess
         self.api_url = api_url.rstrip('/')
         self.multi_provider = multi_provider
+        self.batch_size = batch_size
 
         self._zones = None
         self._zone_records = {}
@@ -1651,12 +1666,15 @@ class CloudflareProvider(BaseProvider):
     def _apply_Create(self, change):
         new = change.new
         zone_id = self.zones[new.zone.name]['id']
+        ops = self._batch_ops()
         if new._type == 'URLFWD':
+            # Pagerules have no batch API so they're written individually
             path = f'/zones/{zone_id}/pagerules'
+            for content in self._gen_data(new):
+                self._try_request('POST', path, data=content)
         else:
-            path = f'/zones/{zone_id}/dns_records'
-        for content in self._gen_data(new):
-            self._try_request('POST', path, data=content)
+            ops['posts'].extend(self._gen_data(new))
+        return ops
 
     def _pagerule_uri(self, record):
         uri = record['targets'][0]['constraint']['value']
@@ -1749,20 +1767,10 @@ class CloudflareProvider(BaseProvider):
             else:
                 creates[key] = data
 
-        # To do this as safely as possible we'll add new things first, update
-        # existing things, and then remove old things. This should (try) and
-        # ensure that we have as many value CF records in their system as
-        # possible at any given time. Ideally we'd have a "batch" API that
-        # would allow create, delete, and upsert style stuff so operations
-        # could be done atomically, but that's not available so we made the
-        # best of it...
-
-        # However, there are record types like CNAME that can only have a
-        # single value. B/c of that our create and then delete approach isn't
-        # actually viable. To address this we'll convert as many creates &
-        # deletes as we can to updates. This will have a minor upside of
-        # resulting in fewer ops and in the case of things like CNAME where
-        # there's a single create and delete result in a single update instead.
+        # There are record types like CNAME that can only have a single
+        # value. When those change we'd otherwise end up with a create and a
+        # delete, so we convert as many creates & deletes as we can to
+        # updates. This keeps record ids stable and results in fewer ops.
         create_keys = sorted(creates.keys())
         delete_keys = sorted(deletes.keys())
         for i in range(0, min(len(create_keys), len(delete_keys))):
@@ -1775,31 +1783,13 @@ class CloudflareProvider(BaseProvider):
                 'old_data': delete_info['data'],
             }
 
-        # The sorts ensure a consistent order of operations, they're not
-        # otherwise required, just makes things deterministic
-
-        # Creates
-        if _type == 'URLFWD':
-            path = f'/zones/{zone_id}/pagerules'
-        else:
-            path = f'/zones/{zone_id}/dns_records'
-        for _, data in sorted(creates.items()):
-            self.log.debug('_apply_Update: creating %s', data)
-            self._try_request('POST', path, data=data)
-
-        # Updates
-        for _, info in sorted(updates.items()):
-            record_id = info['record_id']
+        # When the desired record leaves flatten_cname unmanaged (absent) on an
+        # ordinary (non-proxied) CNAME, preserve an existing API true value so
+        # an unrelated update does not clear it. Explicit desired values are
+        # already emitted by _gen_data and take precedence.
+        for info in updates.values():
             data = info['data']
             old_data = info['old_data']
-            if _type == 'URLFWD':
-                path = f'/zones/{zone_id}/pagerules/{record_id}'
-            else:
-                path = f'/zones/{zone_id}/dns_records/{record_id}'
-            # When the desired record leaves flatten_cname unmanaged (absent)
-            # on an ordinary (non-proxied) CNAME, preserve an existing API true
-            # value so an unrelated update does not clear it. Explicit desired
-            # values are already emitted by _gen_data and take precedence.
             if (
                 _type == 'CNAME'
                 and 'settings' not in data
@@ -1807,26 +1797,59 @@ class CloudflareProvider(BaseProvider):
                 and old_data.get('settings', {}).get('flatten_cname') is True
             ):
                 data['settings'] = old_data['settings']
+
+        # The sorts ensure a consistent order of operations, they're not
+        # otherwise required, just makes things deterministic
+        if _type == 'URLFWD':
+            # Pagerules have no batch API so they're written individually.
+            # Adding new things first, then updating, then removing keeps as
+            # many valid rules in place as possible at any given time.
+            path = f'/zones/{zone_id}/pagerules'
+            for _, data in sorted(creates.items()):
+                self.log.debug('_apply_Update: creating %s', data)
+                self._try_request('POST', path, data=data)
+            for _, info in sorted(updates.items()):
+                self.log.debug(
+                    '_apply_Update: updating %s, %s -> %s',
+                    info['record_id'],
+                    info['data'],
+                    info['old_data'],
+                )
+                self._try_request(
+                    'PUT', f'{path}/{info["record_id"]}', data=info['data']
+                )
+            for _, info in sorted(deletes.items()):
+                self.log.debug(
+                    '_apply_Update: removing %s, %s',
+                    info['record_id'],
+                    info['data'],
+                )
+                self._try_request('DELETE', f'{path}/{info["record_id"]}')
+            return self._batch_ops()
+
+        # Cloudflare runs a batch's deletes, then puts, then posts, all in a
+        # single transaction, so the order within the batch doesn't matter
+        # for the record's values as long as it fits in one request.
+        ops = self._batch_ops()
+        for _, data in sorted(creates.items()):
+            self.log.debug('_apply_Update: creating %s', data)
+            ops['posts'].append(data)
+        for _, info in sorted(updates.items()):
             self.log.debug(
                 '_apply_Update: updating %s, %s -> %s',
-                record_id,
-                data,
-                old_data,
+                info['record_id'],
+                info['data'],
+                info['old_data'],
             )
-            self._try_request('PUT', path, data=data)
-
-        # Deletes
+            ops['puts'].append(dict(info['data'], id=info['record_id']))
         for _, info in sorted(deletes.items()):
-            record_id = info['record_id']
-            old_data = info['data']
-            if _type == 'URLFWD':
-                path = f'/zones/{zone_id}/pagerules/{record_id}'
-            else:
-                path = f'/zones/{zone_id}/dns_records/{record_id}'
             self.log.debug(
-                '_apply_Update: removing %s, %s', record_id, old_data
+                '_apply_Update: removing %s, %s',
+                info['record_id'],
+                info['data'],
             )
-            self._try_request('DELETE', path)
+            ops['deletes'].append({'id': info['record_id']})
+        return ops
 
     def _apply_Delete(self, change):
         existing = change.existing
@@ -1834,6 +1857,7 @@ class CloudflareProvider(BaseProvider):
         # Make sure to map ALIAS to CNAME when looking for the target to delete
         existing_type = 'CNAME' if existing._type == 'ALIAS' else existing._type
         zone_id = self.zones[existing.zone.name]['id']
+        ops = self._batch_ops()
         for record in self._zone_records_named(existing.zone, existing_name):
             if 'targets' in record and self.pagerules:
                 record_name = self._pagerule_uri(record).netloc
@@ -1844,24 +1868,48 @@ class CloudflareProvider(BaseProvider):
                 ):
                     path = f'/zones/{zone_id}/pagerules/{record["id"]}'
                     self._try_request('DELETE', path)
-            else:
-                if (
-                    existing_name == record['name']
-                    and existing_type == record['type']
-                ):
-                    record_zone_id = record.get('zone_id')
-                    if record_zone_id is None:
-                        self.log.warning(
-                            '_apply_Delete: record "%s", %s is missing "zone_id", falling back to lookup',
-                            record['name'],
-                            record['type'],
-                        )
-                        record_zone_id = zone_id
-                    path = (
-                        f'/zones/{record_zone_id}/dns_records/'
-                        f'{record["id"]}'
-                    )
-                    self._try_request('DELETE', path)
+            elif (
+                existing_name == record['name']
+                and existing_type == record['type']
+            ):
+                ops['deletes'].append({'id': record['id']})
+        return ops
+
+    def _batch_ops(self):
+        return {'deletes': [], 'puts': [], 'posts': []}
+
+    def _apply_batch(self, zone_id, ops):
+        '''
+        Send the collected DNS record writes to Cloudflare's
+        ``dns_records/batch`` endpoint in requests of at most ``batch_size``
+        operations.
+
+        Cloudflare runs each request's deletes, then puts, then posts, in a
+        single transaction. The ops are cut into requests in that same order,
+        so it also holds across requests. Only a single request is atomic.
+        '''
+        ordered = [
+            (kind, op)
+            for kind in ('deletes', 'puts', 'posts')
+            for op in ops[kind]
+        ]
+        path = f'/zones/{zone_id}/dns_records/batch'
+        for start in range(0, len(ordered), self.batch_size):
+            batch = defaultdict(list)
+            for kind, op in ordered[start : start + self.batch_size]:
+                batch[kind].append(op)
+            counts = ', '.join(f'{len(v)} {k}' for k, v in batch.items())
+            self.log.info('_apply_batch: sending %s', counts)
+            try:
+                self._try_request('POST', path, data=dict(batch))
+            except CloudflareError as e:
+                self.log.error(
+                    '_apply_batch: batch of %s failed, no changes in it were '
+                    'applied, errors=%s',
+                    counts,
+                    e.errors,
+                )
+                raise
 
     def _available_plans(self, zone_name):
         zone_id = self.zones.get(zone_name, {}).get('id', None)
@@ -1969,14 +2017,20 @@ class CloudflareProvider(BaseProvider):
             self.zones[zone_name]['name_servers'],
         )
 
-        # Force the operation order to be Delete() -> Create() -> Update()
-        # This will help avoid problems in updating a CNAME record into an
-        # A record and vice-versa
+        # Sort the changes Delete() -> Create() -> Update(). DNS record writes
+        # are collected into a batch that Cloudflare runs as deletes, then
+        # puts, then posts, so this only sets the order within each of those,
+        # for example NS before DS when creating. Pagerules are still written
+        # individually in this order.
         changes.sort(key=self._change_keyer)
 
+        ops = self._batch_ops()
         for change in changes:
             class_name = change.__class__.__name__
-            getattr(self, f'_apply_{class_name}')(change)
+            change_ops = getattr(self, f'_apply_{class_name}')(change)
+            for kind, kind_ops in change_ops.items():
+                ops[kind].extend(kind_ops)
+        self._apply_batch(self.zones[zone_name]['id'], ops)
 
         # Region is a per-hostname property on a separate API; reconcile it for
         # the whole zone once, after the per-record changes are applied.
