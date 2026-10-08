@@ -13,7 +13,7 @@ from requests_mock import mock as requests_mock
 
 from octodns import __VERSION__ as octodns_version
 from octodns.idna import idna_encode
-from octodns.provider import SupportsException
+from octodns.provider import ProviderException, SupportsException
 from octodns.provider.base import Plan
 from octodns.provider.yaml import YamlProvider
 from octodns.record import Create, Delete, Record, Update
@@ -22,6 +22,7 @@ from octodns.zone import Zone
 from octodns_cloudflare import (
     Cloudflare5xxError,
     CloudflareAuthenticationError,
+    CloudflareError,
     CloudflareInternalProvider,
     CloudflareProvider,
     CloudflareRateLimitError,
@@ -33,6 +34,15 @@ octodns_supports_meta = tuple(int(p) for p in octodns_version.split('.')) >= (
     11,
     0,
 )
+
+
+def batch_requests(provider):
+    # the data of every dns_records/batch request made, in order
+    return [
+        c.kwargs['data']
+        for c in provider._request.call_args_list
+        if c.args[1].endswith('/dns_records/batch')
+    ]
 
 
 def set_record_proxied_flag(record, proxied):
@@ -382,7 +392,7 @@ class TestCloudflareProvider(TestCase):
             {'result': {'id': 42}},  # zone create
         ] + [
             None
-        ] * 34  # individual record creates
+        ] * 35  # pagerule creates and dns record batches
 
         # non-existent zone, create everything
         plan = provider.plan(self.expected)
@@ -397,30 +407,6 @@ class TestCloudflareProvider(TestCase):
                     'POST',
                     '/zones',
                     data={'jump_start': False, 'name': 'unit.tests'},
-                ),
-                # created at least one of the record with expected data
-                call(
-                    'POST',
-                    '/zones/42/dns_records',
-                    data={
-                        'content': 'ns1.unit.tests.',
-                        'type': 'NS',
-                        'name': 'under.unit.tests',
-                        'ttl': 3600,
-                    },
-                ),
-                # make sure semicolons are not escaped when sending data and the
-                # correct double quotes escapes are used so it is accepted by CF
-                call(
-                    'POST',
-                    '/zones/42/dns_records',
-                    data={
-                        "content": "\"v=DKIM1;k=rsa;s=email;h=sha256;"
-                        "p=A/kinda+of/long/string+with+numb3rs\"",
-                        "type": "TXT",
-                        "name": "txt.unit.tests",
-                        "ttl": 600,
-                    },
                 ),
                 # create at least one pagerules
                 call(
@@ -452,7 +438,54 @@ class TestCloudflareProvider(TestCase):
             True,
         )
         # expected number of total calls
-        self.assertEqual(36, provider._request.call_count)
+        self.assertEqual(6, provider._request.call_count)
+        # the dns records went out in a single batch, except the DS whose NS
+        # is created in that batch, Cloudflare requires the NS exist first
+        batches = batch_requests(provider)
+        self.assertEqual(2, len(batches))
+        self.assertEqual(['posts'], list(batches[0].keys()))
+        posts = batches[0]['posts']
+        self.assertEqual(31, len(posts))
+        self.assertEqual(
+            {
+                'posts': [
+                    {
+                        'data': {
+                            'algorithm': 13,
+                            'digest': 'b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c',
+                            'digest_type': 2,
+                            'key_tag': 1,
+                        },
+                        'type': 'DS',
+                        'name': 'ds.unit.tests',
+                        'ttl': 300,
+                    }
+                ]
+            },
+            batches[1],
+        )
+        # created at least one of the record with expected data
+        self.assertIn(
+            {
+                'content': 'ns1.unit.tests.',
+                'type': 'NS',
+                'name': 'under.unit.tests',
+                'ttl': 3600,
+            },
+            posts,
+        )
+        # make sure semicolons are not escaped when sending data and the
+        # correct double quotes escapes are used so it is accepted by CF
+        self.assertIn(
+            {
+                'content': '"v=DKIM1;k=rsa;s=email;h=sha256;'
+                'p=A/kinda+of/long/string+with+numb3rs"',
+                'type': 'TXT',
+                'name': 'txt.unit.tests',
+                'ttl': 600,
+            },
+            posts,
+        )
 
         provider._request.reset_mock()
 
@@ -627,27 +660,6 @@ class TestCloudflareProvider(TestCase):
                     'DELETE',
                     '/zones/42/pagerules/2a9141b18ffb0e6aed826050eec970b8',
                 ),
-                # this one used the zone_id lookup fallback, thus 42
-                call(
-                    'DELETE',
-                    '/zones/42/dns_records/fc12ab34cd5611334422ab3322997653',
-                ),
-                call(
-                    'DELETE',
-                    '/zones/ff12ab34cd5611334422ab3322997650/'
-                    'dns_records/fc12ab34cd5611334422ab3322997654',
-                ),
-                call(
-                    'PUT',
-                    '/zones/42/dns_records/fc12ab34cd5611334422ab3322997655',
-                    data={
-                        'content': '3.2.3.4',
-                        'type': 'A',
-                        'name': 'ttl.unit.tests',
-                        'proxied': False,
-                        'ttl': 300,
-                    },
-                ),
                 call(
                     'PUT',
                     '/zones/42/pagerules/2a9140b17ffb0e6aed826049eec970b7',
@@ -671,6 +683,28 @@ class TestCloudflareProvider(TestCase):
                             }
                         ],
                         'status': 'active',
+                    },
+                ),
+                # dns records are deleted & updated in a single batch, a
+                # record's own zone_id doesn't matter, the zone's is used
+                call(
+                    'POST',
+                    '/zones/42/dns_records/batch',
+                    data={
+                        'deletes': [
+                            {'id': 'fc12ab34cd5611334422ab3322997653'},
+                            {'id': 'fc12ab34cd5611334422ab3322997654'},
+                        ],
+                        'puts': [
+                            {
+                                'content': '3.2.3.4',
+                                'type': 'A',
+                                'name': 'ttl.unit.tests',
+                                'proxied': False,
+                                'ttl': 300,
+                                'id': 'fc12ab34cd5611334422ab3322997655',
+                            }
+                        ],
                     },
                 ),
             ]
@@ -713,29 +747,6 @@ class TestCloudflareProvider(TestCase):
                         'account': {'id': '334234243423aaabb334342aaa343433'},
                     },
                 ),
-                # created at least one of the record with expected data
-                call(
-                    'POST',
-                    '/zones/42/dns_records',
-                    data={
-                        'content': 'ns1.unit.tests.',
-                        'type': 'NS',
-                        'name': 'under.unit.tests',
-                        'ttl': 3600,
-                    },
-                ),
-                # make sure semicolons are not escaped when sending data
-                call(
-                    'POST',
-                    '/zones/42/dns_records',
-                    data={
-                        "content": "\"v=DKIM1;k=rsa;s=email;h=sha256;"
-                        "p=A/kinda+of/long/string+with+numb3rs\"",
-                        "type": "TXT",
-                        "name": "txt.unit.tests",
-                        "ttl": 600,
-                    },
-                ),
                 # create at least one pagerules
                 call(
                     'POST',
@@ -766,7 +777,7 @@ class TestCloudflareProvider(TestCase):
             True,
         )
         # expected number of total calls
-        self.assertEqual(36, provider._request.call_count)
+        self.assertEqual(6, provider._request.call_count)
 
         # Creating new zone with plan_type
         provider = CloudflareProvider(
@@ -786,7 +797,7 @@ class TestCloudflareProvider(TestCase):
             {'result': {'plan': {'legacy_id': 'enterprise'}}},  # plan update
         ] + [
             self.empty
-        ] * 34  # individual record creates
+        ] * 4  # 2 pagerule creates and 2 record batches
 
         # non-existent zone, create everything
         plan = provider.plan(self.expected)
@@ -806,7 +817,7 @@ class TestCloudflareProvider(TestCase):
                 },
             )
         ]
-        request_call_count = 36
+        request_call_count = 6
         if octodns_supports_meta:
             request_call_count += 2
             expected.extend(
@@ -817,18 +828,15 @@ class TestCloudflareProvider(TestCase):
                     call('PATCH', '/zones/42', data={'plan': {'id': 'plan-2'}}),
                 ]
             )
-        expected.append(
-            call(
-                'POST',
-                '/zones/42/dns_records',
-                data={
-                    'content': '1.2.3.4',
-                    'name': 'unit.tests',
-                    'type': 'A',
-                    'ttl': 300,
-                    'proxied': False,
-                },
-            )
+        self.assertIn(
+            {
+                'content': '1.2.3.4',
+                'name': 'unit.tests',
+                'type': 'A',
+                'ttl': 300,
+                'proxied': False,
+            },
+            batch_requests(provider)[0]['posts'],
         )
         provider._request.assert_has_calls(expected, False)
         # expected number of total calls
@@ -845,7 +853,7 @@ class TestCloudflareProvider(TestCase):
             {'result': {'id': 42, 'name_servers': ['foo']}},  # zone create
         ] + [
             self.empty
-        ] * 34  # individual record creates
+        ] * 4  # 2 pagerule creates and 2 record batches
 
         # non-existent zone, create everything
         plan = provider.plan(self.expected)
@@ -864,24 +872,25 @@ class TestCloudflareProvider(TestCase):
                         'name': 'unit.tests',
                         'account': {'id': 'account_id'},
                     },
-                ),
-                # no call to get available plans or update plan here
-                call(
-                    'POST',
-                    '/zones/42/dns_records',
-                    data={
-                        'content': '1.2.3.4',
-                        'name': 'unit.tests',
-                        'type': 'A',
-                        'ttl': 300,
-                        'proxied': False,
-                    },
-                ),
+                )
             ],
             False,
         )
+        # no call to get available plans or update plan here
+        paths = [c.args[1] for c in provider._request.call_args_list]
+        self.assertNotIn('/zones/42/available_plans', paths)
+        self.assertIn(
+            {
+                'content': '1.2.3.4',
+                'name': 'unit.tests',
+                'type': 'A',
+                'ttl': 300,
+                'proxied': False,
+            },
+            batch_requests(provider)[0]['posts'],
+        )
         # expected number of total calls
-        self.assertEqual(36, provider._request.call_count)
+        self.assertEqual(6, provider._request.call_count)
 
         # Plan update when current plan differs
         provider = CloudflareProvider(
@@ -910,13 +919,13 @@ class TestCloudflareProvider(TestCase):
             {'result': {'plan': {'legacy_id': 'enterprise'}}},
         ] + [
             self.empty
-        ] * 34  # Create new records
+        ] * 4  # 2 pagerule creates and 2 record batches
 
         plan = provider.plan(self.expected)
         self.assertEqual(22, len(plan.changes))
         self.assertEqual(22, provider.apply(plan))
 
-        request_call_count = 36
+        request_call_count = 6
         expected = [
             # Get existing records
             call(
@@ -1061,35 +1070,35 @@ class TestCloudflareProvider(TestCase):
                 ),
                 call(
                     'POST',
-                    '/zones/42/dns_records',
+                    '/zones/42/dns_records/batch',
                     data={
-                        'content': '4.4.4.4',
-                        'type': 'A',
-                        'name': 'a.unit.tests',
-                        'proxied': False,
-                        'ttl': 300,
-                    },
-                ),
-                call(
-                    'PUT',
-                    '/zones/42/dns_records/fc12ab34cd5611334422ab3322997654',
-                    data={
-                        'content': '2.2.2.2',
-                        'type': 'A',
-                        'name': 'a.unit.tests',
-                        'proxied': False,
-                        'ttl': 300,
-                    },
-                ),
-                call(
-                    'PUT',
-                    '/zones/42/dns_records/fc12ab34cd5611334422ab3322997653',
-                    data={
-                        'content': '3.3.3.3',
-                        'type': 'A',
-                        'name': 'a.unit.tests',
-                        'proxied': False,
-                        'ttl': 300,
+                        'puts': [
+                            {
+                                'content': '2.2.2.2',
+                                'type': 'A',
+                                'name': 'a.unit.tests',
+                                'proxied': False,
+                                'ttl': 300,
+                                'id': 'fc12ab34cd5611334422ab3322997654',
+                            },
+                            {
+                                'content': '3.3.3.3',
+                                'type': 'A',
+                                'name': 'a.unit.tests',
+                                'proxied': False,
+                                'ttl': 300,
+                                'id': 'fc12ab34cd5611334422ab3322997653',
+                            },
+                        ],
+                        'posts': [
+                            {
+                                'content': '4.4.4.4',
+                                'type': 'A',
+                                'name': 'a.unit.tests',
+                                'proxied': False,
+                                'ttl': 300,
+                            }
+                        ],
                     },
                 ),
             ]
@@ -1262,7 +1271,8 @@ class TestCloudflareProvider(TestCase):
         plan = Plan(zone, zone, [change, changeurlfwd], True)
         provider._apply(plan)
 
-        # Get zones, create zone, create a record, delete a record
+        # Get zones, create zone, pagerule update & delete, then the records
+        # in one batch
         provider._request.assert_has_calls(
             [
                 call('GET', '/zones', params={'page': 1, 'per_page': 50}),
@@ -1270,20 +1280,6 @@ class TestCloudflareProvider(TestCase):
                     'POST',
                     '/zones',
                     data={'jump_start': False, 'name': 'unit.tests'},
-                ),
-                call(
-                    'PUT',
-                    '/zones/42/dns_records/fc12ab34cd5611334422ab3322997654',
-                    data={
-                        'content': 'ns2.foo.bar.',
-                        'type': 'NS',
-                        'name': 'unit.tests',
-                        'ttl': 300,
-                    },
-                ),
-                call(
-                    'DELETE',
-                    '/zones/42/dns_records/fc12ab34cd5611334422ab3322997653',
                 ),
                 call(
                     'PUT',
@@ -1313,6 +1309,22 @@ class TestCloudflareProvider(TestCase):
                 call(
                     'DELETE',
                     '/zones/42/pagerules/2a9141b18ffb0e6aed826054eec970b8',
+                ),
+                call(
+                    'POST',
+                    '/zones/42/dns_records/batch',
+                    data={
+                        'deletes': [{'id': 'fc12ab34cd5611334422ab3322997653'}],
+                        'puts': [
+                            {
+                                'content': 'ns2.foo.bar.',
+                                'type': 'NS',
+                                'name': 'unit.tests',
+                                'ttl': 300,
+                                'id': 'fc12ab34cd5611334422ab3322997654',
+                            }
+                        ],
+                    },
                 ),
             ]
         )
@@ -4414,19 +4426,26 @@ class TestCloudflareProvider(TestCase):
             zone, 'a', {'ttl': 600, 'type': 'CNAME', 'value': 'www.unit.tests.'}
         )
 
-        provider._apply_Update(Update(existing, new))
+        ops = provider._apply_Update(Update(existing, new))
 
-        provider._request.assert_called_once_with(
-            'PUT',
-            '/zones/42/dns_records/fc12ab34cd5611334422ab3322997642',
-            data={
-                'content': 'www.unit.tests.',
-                'type': 'CNAME',
-                'name': 'a.unit.tests',
-                'proxied': False,
-                'ttl': 600,
-                'settings': {'flatten_cname': True},
+        provider._request.assert_not_called()
+        self.assertEqual(
+            {
+                'deletes': [],
+                'posts': [],
+                'puts': [
+                    {
+                        'id': 'fc12ab34cd5611334422ab3322997642',
+                        'content': 'www.unit.tests.',
+                        'type': 'CNAME',
+                        'name': 'a.unit.tests',
+                        'proxied': False,
+                        'ttl': 600,
+                        'settings': {'flatten_cname': True},
+                    }
+                ],
             },
+            ops,
         )
 
     def test_apply_update_proxied_transition_omits_flatten_cname(self):
@@ -4467,18 +4486,25 @@ class TestCloudflareProvider(TestCase):
             True,
         )
 
-        provider._apply_Update(Update(existing, new))
+        ops = provider._apply_Update(Update(existing, new))
 
-        provider._request.assert_called_once_with(
-            'PUT',
-            '/zones/42/dns_records/fc12ab34cd5611334422ab3322997642',
-            data={
-                'content': 'www.unit.tests.',
-                'type': 'CNAME',
-                'name': 'a.unit.tests',
-                'proxied': True,
-                'ttl': 1,
+        provider._request.assert_not_called()
+        self.assertEqual(
+            {
+                'deletes': [],
+                'posts': [],
+                'puts': [
+                    {
+                        'id': 'fc12ab34cd5611334422ab3322997642',
+                        'content': 'www.unit.tests.',
+                        'type': 'CNAME',
+                        'name': 'a.unit.tests',
+                        'proxied': True,
+                        'ttl': 1,
+                    }
+                ],
             },
+            ops,
         )
 
     def test_apply_update_explicit_false_clears_flatten_cname_true(self):
@@ -4519,19 +4545,26 @@ class TestCloudflareProvider(TestCase):
             False,
         )
 
-        provider._apply_Update(Update(existing, new))
+        ops = provider._apply_Update(Update(existing, new))
 
-        provider._request.assert_called_once_with(
-            'PUT',
-            '/zones/42/dns_records/fc12ab34cd5611334422ab3322997642',
-            data={
-                'content': 'www.unit.tests.',
-                'type': 'CNAME',
-                'name': 'a.unit.tests',
-                'proxied': False,
-                'ttl': 300,
-                'settings': {'flatten_cname': False},
+        provider._request.assert_not_called()
+        self.assertEqual(
+            {
+                'deletes': [],
+                'posts': [],
+                'puts': [
+                    {
+                        'id': 'fc12ab34cd5611334422ab3322997642',
+                        'content': 'www.unit.tests.',
+                        'type': 'CNAME',
+                        'name': 'a.unit.tests',
+                        'proxied': False,
+                        'ttl': 300,
+                        'settings': {'flatten_cname': False},
+                    }
+                ],
             },
+            ops,
         )
 
     def test_apply_create_omits_unmanaged_flatten_cname(self):
@@ -4544,18 +4577,24 @@ class TestCloudflareProvider(TestCase):
             zone, 'a', {'ttl': 300, 'type': 'CNAME', 'value': 'www.unit.tests.'}
         )
 
-        provider._apply_Create(Create(new))
+        ops = provider._apply_Create(Create(new))
 
-        provider._request.assert_called_once_with(
-            'POST',
-            '/zones/42/dns_records',
-            data={
-                'content': 'www.unit.tests.',
-                'type': 'CNAME',
-                'name': 'a.unit.tests',
-                'proxied': False,
-                'ttl': 300,
+        provider._request.assert_not_called()
+        self.assertEqual(
+            {
+                'deletes': [],
+                'puts': [],
+                'posts': [
+                    {
+                        'content': 'www.unit.tests.',
+                        'type': 'CNAME',
+                        'name': 'a.unit.tests',
+                        'proxied': False,
+                        'ttl': 300,
+                    }
+                ],
             },
+            ops,
         )
 
     def test_per_value_metadata_populate_differing(self):
@@ -5712,13 +5751,15 @@ class TestCloudflareProvider(TestCase):
         }
         provider._update_plan = Mock()
         provider._request = Mock()
-        provider._request.side_effect = [self.empty] * 36  # Create new records
+        provider._request.side_effect = [
+            self.empty
+        ] * 6  # 2 gets, 2 pagerules, 2 batches
         provider.log = Mock()
 
         plan = provider.plan(self.expected)
         delattr(plan, 'meta')  # Remove meta attribute to simulate older octodns
         provider.apply(plan)
-        self.assertEqual(36, provider._request.call_count)
+        self.assertEqual(6, provider._request.call_count)
         provider._update_plan.assert_not_called()
 
         provider.log.warning.assert_called_once_with(
@@ -5739,12 +5780,12 @@ class TestCloudflareProvider(TestCase):
         }
         provider._update_plan = Mock()
         provider._request = Mock()
-        provider._request.side_effect = [self.empty] * 36
+        provider._request.side_effect = [self.empty] * 6
 
         plan = provider.plan(self.expected)
         plan.meta = {}  # Override meta to be empty
         provider.apply(plan)
-        self.assertEqual(36, provider._request.call_count)
+        self.assertEqual(6, provider._request.call_count)
         provider._update_plan.assert_not_called()
 
         # Meta without cloudflare_plan
@@ -5760,12 +5801,12 @@ class TestCloudflareProvider(TestCase):
         }
         provider._update_plan = Mock()
         provider._request = Mock()
-        provider._request.side_effect = [self.empty] * 36
+        provider._request.side_effect = [self.empty] * 6
 
         plan = provider.plan(self.expected)
         plan.meta = {'other_key': 'value'}  # Override meta with unrelated data
         provider.apply(plan)
-        self.assertEqual(36, provider._request.call_count)
+        self.assertEqual(6, provider._request.call_count)
         provider._update_plan.assert_not_called()
 
         # Meta with cloudflare_plan but no desired plan
@@ -5781,13 +5822,336 @@ class TestCloudflareProvider(TestCase):
         }
         provider._update_plan = Mock()
         provider._request = Mock()
-        provider._request.side_effect = [self.empty] * 36
+        provider._request.side_effect = [self.empty] * 6
 
         plan = provider.plan(self.expected)
         plan.meta = {'cloudflare_plan': {'current': 'pro'}}  # No desired plan
         provider.apply(plan)
-        self.assertEqual(36, provider._request.call_count)
+        self.assertEqual(6, provider._request.call_count)
         provider._update_plan.assert_not_called()
+
+    def test_batch_size(self):
+        # default
+        provider = CloudflareProvider('test', 'email', 'token')
+        self.assertEqual(200, provider.batch_size)
+
+        # custom
+        provider = CloudflareProvider('test', 'email', 'token', batch_size=7)
+        self.assertEqual(7, provider.batch_size)
+
+        # invalid values
+        for bad in (0, -1, 'x', True, 1.5, None):
+            with self.assertRaises(ProviderException) as ctx:
+                CloudflareProvider('test', 'email', 'token', batch_size=bad)
+            self.assertIn(
+                'batch_size must be a positive integer', str(ctx.exception)
+            )
+
+    def test_cloudflare_error_errors(self):
+        errors = [{'code': 81058, 'message': 'An identical record exists.'}]
+        err = CloudflareError({'errors': errors})
+        self.assertEqual(errors, err.errors)
+        self.assertEqual('An identical record exists.', str(err))
+
+        # no errors key, non-dict data, and an empty errors list
+        self.assertEqual([], CloudflareError({}).errors)
+        self.assertEqual([], CloudflareError({'success': False}).errors)
+        self.assertEqual([], CloudflareError('not a dict').errors)
+        self.assertEqual([], CloudflareError(None).errors)
+        err = CloudflareError({'errors': []})
+        self.assertEqual([], err.errors)
+        self.assertEqual('Cloudflare error', str(err))
+
+    def _batch_provider(self, records, **kwargs):
+        provider = CloudflareProvider(
+            'test', 'email', 'token', retry_period=0, **kwargs
+        )
+        provider._zones = {'unit.tests.': {'id': '42', 'name_servers': []}}
+        provider._request = Mock(return_value={'result': {}})
+        provider.zone_records = Mock(return_value=records)
+        return provider
+
+    @staticmethod
+    def _batch_a(_id, name, content):
+        return {
+            'id': _id,
+            'type': 'A',
+            'name': name,
+            'content': content,
+            'proxiable': True,
+            'proxied': False,
+            'ttl': 300,
+            'locked': False,
+        }
+
+    def test_apply_batch_defers_ds_after_new_ns(self):
+        provider = self._batch_provider([])
+        ds = {
+            'type': 'DS',
+            'ttl': 300,
+            'value': {
+                'key_tag': 1,
+                'algorithm': 13,
+                'digest_type': 2,
+                'digest': 'ab' * 32,
+            },
+        }
+        zone = Zone('unit.tests.', [])
+        plan = Plan(
+            zone,
+            zone,
+            [
+                # new delegation, the DS has to wait for its NS
+                Create(Record.new(zone, 'new', ds)),
+                Create(
+                    Record.new(
+                        zone,
+                        'new',
+                        {'type': 'NS', 'ttl': 300, 'value': 'ns1.unit.tests.'},
+                    )
+                ),
+                # DS added to an existing delegation goes in the main batch
+                Create(Record.new(zone, 'old', ds)),
+            ],
+            True,
+        )
+        provider._apply(plan)
+
+        batches = batch_requests(provider)
+        self.assertEqual(2, len(batches))
+        self.assertEqual(
+            [('NS', 'new.unit.tests'), ('DS', 'old.unit.tests')],
+            [(p['type'], p['name']) for p in batches[0]['posts']],
+        )
+        self.assertEqual(
+            [('DS', 'new.unit.tests')],
+            [(p['type'], p['name']) for p in batches[1]['posts']],
+        )
+
+    def test_apply_batch_chunking(self):
+        provider = self._batch_provider(
+            [
+                self._batch_a('b1', 'b.unit.tests', '2.2.2.2'),
+                self._batch_a('c1', 'c.unit.tests', '3.3.3.3'),
+                self._batch_a('d1', 'd.unit.tests', '4.4.4.4'),
+            ],
+            batch_size=2,
+        )
+
+        zone = Zone('unit.tests.', [])
+
+        def rec(name, value):
+            return Record.new(
+                zone, name, {'ttl': 300, 'type': 'A', 'value': value}
+            )
+
+        plan = Plan(
+            zone,
+            zone,
+            [
+                Create(rec('e', '5.5.5.5')),
+                Create(rec('f', '6.6.6.6')),
+                Update(rec('b', '2.2.2.2'), rec('b', '7.7.7.7')),
+                Delete(rec('c', '3.3.3.3')),
+                Delete(rec('d', '4.4.4.4')),
+            ],
+            True,
+        )
+        provider._apply(plan)
+
+        def a(name, value, **extra):
+            return dict(
+                {
+                    'content': value,
+                    'type': 'A',
+                    'name': f'{name}.unit.tests',
+                    'proxied': False,
+                    'ttl': 300,
+                },
+                **extra,
+            )
+
+        # deletes, then puts, then posts, globally across the chunks
+        self.assertEqual(
+            [
+                call(
+                    'POST',
+                    '/zones/42/dns_records/batch',
+                    data={'deletes': [{'id': 'c1'}, {'id': 'd1'}]},
+                ),
+                call(
+                    'POST',
+                    '/zones/42/dns_records/batch',
+                    data={
+                        'puts': [a('b', '7.7.7.7', id='b1')],
+                        'posts': [a('e', '5.5.5.5')],
+                    },
+                ),
+                call(
+                    'POST',
+                    '/zones/42/dns_records/batch',
+                    data={'posts': [a('f', '6.6.6.6')]},
+                ),
+            ],
+            provider._request.call_args_list,
+        )
+
+    def test_apply_update_pagerule_create(self):
+        # an URLFWD that gains a value creates a new pagerule individually
+        # while the existing one is updated, no batch is involved
+        provider = self._batch_provider(
+            [
+                {
+                    'id': 'pr1',
+                    'targets': [
+                        {
+                            'target': 'url',
+                            'constraint': {
+                                'operator': 'matches',
+                                'value': 'urlfwd.unit.tests/',
+                            },
+                        }
+                    ],
+                    'actions': [
+                        {
+                            'id': 'forwarding_url',
+                            'value': {
+                                'url': 'https://www.unit.tests',
+                                'status_code': 302,
+                            },
+                        }
+                    ],
+                    'priority': 1,
+                    'status': 'active',
+                }
+            ],
+            pagerules=True,
+        )
+        zone = Zone('unit.tests.', [])
+
+        def value(path):
+            return {
+                'path': path,
+                'target': 'https://www.unit.tests',
+                'code': 302,
+                'masking': 2,
+                'query': 0,
+            }
+
+        existing = Record.new(
+            zone, 'urlfwd', {'ttl': 300, 'type': 'URLFWD', 'value': value('/')}
+        )
+        new = Record.new(
+            zone,
+            'urlfwd',
+            {
+                'ttl': 300,
+                'type': 'URLFWD',
+                'values': [value('/'), value('/other')],
+            },
+        )
+        ops = provider._apply_Update(Update(existing, new))
+        self.assertEqual({'deletes': [], 'puts': [], 'posts': []}, ops)
+        self.assertEqual(
+            ['/zones/42/pagerules'],
+            [
+                c.args[1]
+                for c in provider._request.call_args_list
+                if c.args[0] == 'POST'
+            ],
+        )
+
+    def test_apply_batch_single_request(self):
+        provider = self._batch_provider([])
+        zone = Zone('unit.tests.', [])
+        plan = Plan(
+            zone,
+            zone,
+            [
+                Create(
+                    Record.new(
+                        zone, 'e', {'ttl': 300, 'type': 'A', 'value': '5.5.5.5'}
+                    )
+                )
+            ],
+            True,
+        )
+        provider._apply(plan)
+        # everything fits in one request, empty kinds are omitted
+        provider._request.assert_called_once()
+        data = provider._request.call_args.kwargs['data']
+        self.assertEqual(['posts'], list(data.keys()))
+
+    def test_apply_batch_no_dns_writes(self):
+        provider = self._batch_provider([], regional_services=True)
+        provider._reconcile_regions = Mock()
+        zone = Zone('unit.tests.', [])
+
+        # no changes at all
+        provider._apply(Plan(zone, zone, [], True))
+        provider._request.assert_not_called()
+        provider._reconcile_regions.assert_called_once()
+
+        # only pagerule changes, they're written individually
+        provider._reconcile_regions.reset_mock()
+        provider.pagerules = True
+        urlfwd = Record.new(
+            zone,
+            'urlfwd',
+            {
+                'ttl': 300,
+                'type': 'URLFWD',
+                'value': {
+                    'path': '/',
+                    'target': 'https://www.unit.tests',
+                    'code': 302,
+                    'masking': 2,
+                    'query': 0,
+                },
+            },
+        )
+        provider._apply(Plan(zone, zone, [Create(urlfwd)], True))
+        provider._request.assert_called_once()
+        self.assertEqual(
+            ('POST', '/zones/42/pagerules'), provider._request.call_args.args
+        )
+        paths = [c.args[1] for c in provider._request.call_args_list]
+        self.assertNotIn('/zones/42/dns_records/batch', paths)
+
+    def test_apply_batch_failure(self):
+        provider = self._batch_provider([], regional_services=True)
+        provider._reconcile_regions = Mock()
+        errors = [
+            {'code': 81058, 'message': 'An identical record already exists.'}
+        ]
+        provider._request.side_effect = CloudflareError({'errors': errors})
+
+        zone = Zone('unit.tests.', [])
+        plan = Plan(
+            zone,
+            zone,
+            [
+                Create(
+                    Record.new(
+                        zone, 'e', {'ttl': 300, 'type': 'A', 'value': '5.5.5.5'}
+                    )
+                )
+            ],
+            True,
+        )
+        with self.assertLogs(provider.log.name, level='ERROR') as logs:
+            with self.assertRaises(CloudflareError) as ctx:
+                provider._apply(plan)
+        self.assertEqual(errors, ctx.exception.errors)
+        self.assertEqual(1, len(logs.records))
+        message = logs.records[0].getMessage()
+        self.assertIn('81058', message)
+        self.assertIn('An identical record already exists.', message)
+        self.assertIn('1 posts', message)
+
+        # only the failed batch was attempted and regions weren't reconciled
+        provider._request.assert_called_once()
+        provider._reconcile_regions.assert_not_called()
 
 
 class TestCloudflareInternalProviderFlatten(TestCase):
@@ -6004,35 +6368,31 @@ class TestCloudflareProviderRecordIndex(TestCase):
         # only the two records at a.unit.tests are converted, not every record
         # in the zone for every change
         self.assertEqual(2, record_for.call_count)
-        provider._request.assert_has_calls(
-            [
-                call('DELETE', '/zones/42/dns_records/c1'),
-                call('DELETE', '/zones/42/dns_records/d1'),
-                call(
-                    'PUT',
-                    '/zones/42/dns_records/a1',
-                    data={
+        provider._request.assert_called_once_with(
+            'POST',
+            '/zones/42/dns_records/batch',
+            data={
+                'deletes': [{'id': 'c1'}, {'id': 'd1'}],
+                'puts': [
+                    {
                         'content': '1.1.1.1',
                         'type': 'A',
                         'name': 'a.unit.tests',
                         'proxied': False,
                         'ttl': 300,
+                        'id': 'a1',
                     },
-                ),
-                call(
-                    'PUT',
-                    '/zones/42/dns_records/a2',
-                    data={
+                    {
                         'content': '6.6.6.6',
                         'type': 'A',
                         'name': 'a.unit.tests',
                         'proxied': False,
                         'ttl': 300,
+                        'id': 'a2',
                     },
-                ),
-            ]
+                ],
+            },
         )
-        self.assertEqual(4, provider._request.call_count)
         # the cache is dropped once the apply finishes
         self.assertNotIn('unit.tests.', provider._zone_record_index)
 
@@ -6046,17 +6406,24 @@ class TestCloudflareProviderRecordIndex(TestCase):
         new = Record.new(
             zone, 'a', {'ttl': 300, 'type': 'A', 'value': '2.2.2.2'}
         )
-        provider._apply_Update(Update(existing, new))
-        provider._request.assert_called_once_with(
-            'PUT',
-            '/zones/42/dns_records/a1',
-            data={
-                'content': '2.2.2.2',
-                'type': 'A',
-                'name': 'a.unit.tests',
-                'proxied': False,
-                'ttl': 300,
+        ops = provider._apply_Update(Update(existing, new))
+        provider._request.assert_not_called()
+        self.assertEqual(
+            {
+                'deletes': [],
+                'posts': [],
+                'puts': [
+                    {
+                        'content': '2.2.2.2',
+                        'type': 'A',
+                        'name': 'a.unit.tests',
+                        'proxied': False,
+                        'ttl': 300,
+                        'id': 'a1',
+                    }
+                ],
             },
+            ops,
         )
 
         # a new zone_records list is picked up rather than the stale index
@@ -6064,17 +6431,24 @@ class TestCloudflareProviderRecordIndex(TestCase):
             self._a('a9', 'a.unit.tests', '1.1.1.1')
         ]
         provider._request.reset_mock()
-        provider._apply_Update(Update(existing, new))
-        provider._request.assert_called_once_with(
-            'PUT',
-            '/zones/42/dns_records/a9',
-            data={
-                'content': '2.2.2.2',
-                'type': 'A',
-                'name': 'a.unit.tests',
-                'proxied': False,
-                'ttl': 300,
+        ops = provider._apply_Update(Update(existing, new))
+        provider._request.assert_not_called()
+        self.assertEqual(
+            {
+                'deletes': [],
+                'posts': [],
+                'puts': [
+                    {
+                        'content': '2.2.2.2',
+                        'type': 'A',
+                        'name': 'a.unit.tests',
+                        'proxied': False,
+                        'ttl': 300,
+                        'id': 'a9',
+                    }
+                ],
             },
+            ops,
         )
 
     def test_update_matches_normalized_name(self):
@@ -6087,17 +6461,24 @@ class TestCloudflareProviderRecordIndex(TestCase):
         new = Record.new(
             zone, 'a', {'ttl': 300, 'type': 'A', 'value': '2.2.2.2'}
         )
-        provider._apply_Update(Update(existing, new))
-        provider._request.assert_called_once_with(
-            'PUT',
-            '/zones/42/dns_records/a1',
-            data={
-                'content': '2.2.2.2',
-                'type': 'A',
-                'name': 'a.unit.tests',
-                'proxied': False,
-                'ttl': 300,
+        ops = provider._apply_Update(Update(existing, new))
+        provider._request.assert_not_called()
+        self.assertEqual(
+            {
+                'deletes': [],
+                'posts': [],
+                'puts': [
+                    {
+                        'content': '2.2.2.2',
+                        'type': 'A',
+                        'name': 'a.unit.tests',
+                        'proxied': False,
+                        'ttl': 300,
+                        'id': 'a1',
+                    }
+                ],
             },
+            ops,
         )
 
     def test_delete_alias_removes_root_cname(self):
@@ -6121,9 +6502,10 @@ class TestCloudflareProviderRecordIndex(TestCase):
         existing = Record.new(
             zone, '', {'ttl': 300, 'type': 'ALIAS', 'value': 'www.example.com.'}
         )
-        provider._apply_Delete(Delete(existing))
-        provider._request.assert_called_once_with(
-            'DELETE', '/zones/42/dns_records/cname1'
+        ops = provider._apply_Delete(Delete(existing))
+        provider._request.assert_not_called()
+        self.assertEqual(
+            {'deletes': [{'id': 'cname1'}], 'puts': [], 'posts': []}, ops
         )
 
     def test_update_finds_cdn_rewritten_records(self):
@@ -6150,19 +6532,26 @@ class TestCloudflareProviderRecordIndex(TestCase):
             'cdn',
             {'ttl': 300, 'type': 'CNAME', 'value': 'www.example.com.'},
         )
-        provider._apply_Update(Update(existing, new))
+        ops = provider._apply_Update(Update(existing, new))
         # the proxied A at cdn.unit.tests is what the CDN CNAME was read from,
         # so it's the record that gets updated
-        provider._request.assert_called_once_with(
-            'PUT',
-            '/zones/42/dns_records/a1',
-            data={
-                'content': 'www.example.com.',
-                'type': 'CNAME',
-                'name': 'cdn.unit.tests',
-                'proxied': False,
-                'ttl': 300,
+        provider._request.assert_not_called()
+        self.assertEqual(
+            {
+                'deletes': [],
+                'posts': [],
+                'puts': [
+                    {
+                        'content': 'www.example.com.',
+                        'type': 'CNAME',
+                        'name': 'cdn.unit.tests',
+                        'proxied': False,
+                        'ttl': 300,
+                        'id': 'a1',
+                    }
+                ],
             },
+            ops,
         )
 
     def test_mixed_dns_records_and_pagerules(self):
@@ -6221,14 +6610,17 @@ class TestCloudflareProviderRecordIndex(TestCase):
                 },
             },
         )
-        provider._apply_Update(Update(existing, new))
+        ops = provider._apply_Update(Update(existing, new))
+        # pagerules have no batch API, they go out individually
+        self.assertEqual({'deletes': [], 'puts': [], 'posts': []}, ops)
         self.assertEqual(1, provider._request.call_count)
         method, path = provider._request.call_args[0]
         self.assertEqual('PUT', method)
         self.assertEqual('/zones/42/pagerules/pr1', path)
 
         provider._request.reset_mock()
-        provider._apply_Delete(Delete(existing))
+        ops = provider._apply_Delete(Delete(existing))
+        self.assertEqual({'deletes': [], 'puts': [], 'posts': []}, ops)
         provider._request.assert_called_once_with(
             'DELETE', '/zones/42/pagerules/pr1'
         )
@@ -6238,7 +6630,8 @@ class TestCloudflareProviderRecordIndex(TestCase):
         existing_a = Record.new(
             zone, 'urlfwd', {'ttl': 300, 'type': 'A', 'value': '1.1.1.1'}
         )
-        provider._apply_Delete(Delete(existing_a))
-        provider._request.assert_called_once_with(
-            'DELETE', '/zones/42/dns_records/a1'
+        ops = provider._apply_Delete(Delete(existing_a))
+        provider._request.assert_not_called()
+        self.assertEqual(
+            {'deletes': [{'id': 'a1'}], 'puts': [], 'posts': []}, ops
         )

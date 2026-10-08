@@ -376,7 +376,7 @@ class TestCloudflareInternalProvider(TestCase):
         with requests_mock() as mock:
             mock.post(
                 f'https://api.cloudflare.com/client/v4/zones/'
-                f'{ZONE_ID}/dns_records',
+                f'{ZONE_ID}/dns_records/batch',
                 json={'result': {}, 'success': True, 'errors': []},
             )
             # Any POST to /zones (for zone creation) must not happen.
@@ -389,15 +389,17 @@ class TestCloudflareInternalProvider(TestCase):
 
             provider._apply(plan)
 
-            # Verify a single record-create POST fired
+            # Verify a single batch POST fired with the record create
             record_posts = [
                 req
                 for req in mock.request_history
                 if req.method == 'POST'
-                and req.path == f'/client/v4/zones/{ZONE_ID}/dns_records'
+                and req.path == f'/client/v4/zones/{ZONE_ID}/dns_records/batch'
             ]
             self.assertEqual(1, len(record_posts))
-            self.assertEqual('10.0.0.99', record_posts[0].json()['content'])
+            posts = record_posts[0].json()['posts']
+            self.assertEqual(1, len(posts))
+            self.assertEqual('10.0.0.99', posts[0]['content'])
 
     def test_apply_skips_plan_type_handling(self):
         provider = self._provider()
