@@ -13,7 +13,7 @@ from requests_mock import mock as requests_mock
 
 from octodns import __VERSION__ as octodns_version
 from octodns.idna import idna_encode
-from octodns.provider import SupportsException
+from octodns.provider import ProviderException, SupportsException
 from octodns.provider.base import Plan
 from octodns.provider.yaml import YamlProvider
 from octodns.record import Create, Delete, Record, Update
@@ -1316,6 +1316,467 @@ class TestCloudflareProvider(TestCase):
                 ),
             ]
         )
+
+    def _batch_zone_records(self):
+        '''Stubbed Cloudflare records backing one mixed Create/Update/Delete
+        plan: two existing A values at "a" and one deletable A at "b".'''
+        base = {
+            'zone_id': 'ff12ab34cd5611334422ab3322997650',
+            'type': 'A',
+            'ttl': 300,
+        }
+        return [
+            dict(
+                base,
+                id='fc12ab34cd5611334422ab3322997653',
+                name='a.unit.tests',
+                content='1.1.1.1',
+            ),
+            dict(
+                base,
+                id='fc12ab34cd5611334422ab3322997654',
+                name='a.unit.tests',
+                content='2.2.2.2',
+            ),
+            dict(
+                base,
+                id='fc12ab34cd5611334422ab3322997699',
+                name='b.unit.tests',
+                content='9.9.9.9',
+            ),
+        ]
+
+    def _batch_mixed_changes(self, zone):
+        '''One Delete, one Create, and one Update (which itself creates one
+        value, updates one in place, and swaps another via create/delete
+        pairing) against the _batch_zone_records state.'''
+        delete = Delete(
+            Record.new(zone, 'b', {'ttl': 300, 'type': 'A', 'value': '9.9.9.9'})
+        )
+        create = Create(
+            Record.new(zone, 'c', {'ttl': 300, 'type': 'TXT', 'value': 'hello'})
+        )
+        existing = Record.new(
+            zone,
+            'a',
+            {'ttl': 300, 'type': 'A', 'values': ['1.1.1.1', '2.2.2.2']},
+        )
+        new = Record.new(
+            zone,
+            'a',
+            {
+                'ttl': 300,
+                'type': 'A',
+                'values': ['2.2.2.2', '3.3.3.3', '4.4.4.4'],
+            },
+        )
+        return [delete, create, Update(existing, new)]
+
+    def _batch_provider(self, records=None, **kwargs):
+        provider = CloudflareProvider(
+            'test', 'email', 'token', retry_period=0, **kwargs
+        )
+        # zone already exists so apply skips the GET/POST /zones setup
+        provider._zones = {
+            'unit.tests.': {
+                'id': '42',
+                'cloudflare_plan': None,
+                'name_servers': [],
+            }
+        }
+        if records is None:
+            records = self._batch_zone_records()
+        provider.zone_records = Mock(return_value=records)
+        provider._request = Mock(return_value={})
+        return provider
+
+    def _batch_bulk_changes(self, zone, n_deletes, n_puts, n_posts):
+        '''(zone_records, changes) carrying exactly the requested operation
+        counts: one delete per "delNNN" record, one in-place put per
+        "putNNN" update, and one post per "postNNN" create. Zero-padding
+        keeps the change sort order deterministic and numeric.'''
+        base = {
+            'type': 'A',
+            'ttl': 300,
+            'zone_id': 'ff12ab34cd5611334422ab3322997650',
+        }
+        records = []
+        changes = []
+        for k, (kind, count) in enumerate(
+            (('del', n_deletes), ('put', n_puts), ('post', n_posts))
+        ):
+            for i in range(count):
+                name = f'{kind}{i:03d}'
+                value = f'10.{k}.{i // 256}.{i % 256}'
+                data = {'ttl': 300, 'type': 'A', 'value': value}
+                if kind != 'post':
+                    records.append(
+                        dict(
+                            base,
+                            id=f'id-{name}',
+                            name=f'{name}.unit.tests',
+                            content=value,
+                        )
+                    )
+                if kind == 'del':
+                    changes.append(Delete(Record.new(zone, name, data)))
+                elif kind == 'put':
+                    changes.append(
+                        Update(
+                            Record.new(zone, name, data),
+                            Record.new(zone, name, dict(data)),
+                        )
+                    )
+                else:
+                    changes.append(Create(Record.new(zone, name, data)))
+        return records, changes
+
+    def _assert_batch_stream(self, requests, n_deletes, n_puts, n_posts):
+        '''The batch request sequence carries exactly the expected
+        operations in global deletes/puts/posts order across request
+        boundaries, preserving numeric id/name order within each.'''
+        stream = [
+            (name, op)
+            for request in requests
+            for name, ops in request.kwargs['data'].items()
+            for op in ops
+        ]
+        self.assertEqual(n_deletes + n_puts + n_posts, len(stream))
+        self.assertEqual(
+            [f'id-del{i:03d}' for i in range(n_deletes)]
+            + [f'put{i:03d}' for i in range(n_puts)]
+            + [f'post{i:03d}' for i in range(n_posts)],
+            [
+                op['id'] if name == 'deletes' else op['name'].split('.')[0]
+                for name, op in stream
+            ],
+        )
+
+    def test_apply_batch_records(self):
+        provider = self._batch_provider(batch_records=True)
+
+        zone = Zone('unit.tests.', [])
+        plan = Plan(zone, zone, self._batch_mixed_changes(zone), True)
+        provider._apply(plan)
+
+        # one batch request with the whole mixed plan; Cloudflare executes
+        # deletes, then puts, then posts
+        provider._request.assert_called_once_with(
+            'POST',
+            '/zones/42/dns_records/batch',
+            data={
+                'deletes': [{'id': 'fc12ab34cd5611334422ab3322997699'}],
+                'puts': [
+                    {
+                        'id': 'fc12ab34cd5611334422ab3322997654',
+                        'content': '2.2.2.2',
+                        'name': 'a.unit.tests',
+                        'type': 'A',
+                        'ttl': 300,
+                        'proxied': False,
+                    },
+                    {
+                        'id': 'fc12ab34cd5611334422ab3322997653',
+                        'content': '3.3.3.3',
+                        'name': 'a.unit.tests',
+                        'type': 'A',
+                        'ttl': 300,
+                        'proxied': False,
+                    },
+                ],
+                'posts': [
+                    {
+                        'content': '"hello"',
+                        'name': 'c.unit.tests',
+                        'type': 'TXT',
+                        'ttl': 300,
+                    },
+                    {
+                        'content': '4.4.4.4',
+                        'name': 'a.unit.tests',
+                        'type': 'A',
+                        'ttl': 300,
+                        'proxied': False,
+                    },
+                ],
+            },
+        )
+
+    def test_apply_batch_records_chunked_at_operation_limit(self):
+        zone = Zone('unit.tests.', [])
+        # 50 deletes + 100 puts + 50 posts = exactly one full request
+        records, changes = self._batch_bulk_changes(zone, 50, 100, 50)
+        self.assertEqual(200, len(changes))
+        provider = self._batch_provider(records=records, batch_records=True)
+
+        plan = Plan(zone, zone, changes, True)
+        provider._apply(plan)
+
+        # exactly 200 operations fit a single batch request, and no
+        # individual ordinary dns_records writes occur
+        provider._request.assert_called_once()
+        request = provider._request.call_args
+        self.assertEqual(('POST', '/zones/42/dns_records/batch'), request.args)
+        data = request.kwargs['data']
+        self.assertEqual(['deletes', 'puts', 'posts'], list(data.keys()))
+        self.assertEqual(50, len(data['deletes']))
+        self.assertEqual(100, len(data['puts']))
+        self.assertEqual(50, len(data['posts']))
+        self._assert_batch_stream([request], 50, 100, 50)
+
+    def test_apply_batch_records_chunked_over_operation_limit(self):
+        zone = Zone('unit.tests.', [])
+        # 100 deletes + 100 puts exactly fill the first request, so the
+        # trailing post crosses the chunk boundary into a second request
+        records, changes = self._batch_bulk_changes(zone, 100, 100, 1)
+        self.assertEqual(201, len(changes))
+        provider = self._batch_provider(records=records, batch_records=True)
+
+        plan = Plan(zone, zone, changes, True)
+        provider._apply(plan)
+
+        requests = provider._request.call_args_list
+        # two batch requests and nothing else: no individual ordinary
+        # dns_records writes occur
+        self.assertEqual(2, len(requests))
+
+        # the chunk boundary crosses operation categories: deletes and
+        # puts fill the first request, the lone post makes up the second
+        expected = ((['deletes', 'puts'], [100, 100]), (['posts'], [1]))
+        for i, (keys, counts) in enumerate(expected):
+            with self.subTest(request=i):
+                self.assertEqual(
+                    ('POST', '/zones/42/dns_records/batch'), requests[i].args
+                )
+                data = requests[i].kwargs['data']
+                self.assertEqual(keys, list(data.keys()))
+                self.assertEqual(counts, [len(data[key]) for key in keys])
+
+        self._assert_batch_stream(requests, 100, 100, 1)
+
+    def test_apply_batch_records_does_not_retry_5xx(self):
+        zone = Zone('unit.tests.', [])
+        records, changes = self._batch_bulk_changes(zone, 200, 0, 1)
+        provider = self._batch_provider(records=records, batch_records=True)
+        provider._request.side_effect = Cloudflare5xxError(
+            {'errors': [{'message': 'ambiguous batch failure'}]}
+        )
+
+        plan = Plan(zone, zone, changes, True)
+        with self.assertRaises(Cloudflare5xxError):
+            provider._apply(plan)
+
+        # The failed first chunk is not replayed, and the second chunk is
+        # not attempted.
+        provider._request.assert_called_once()
+        request = provider._request.call_args
+        self.assertEqual(('POST', '/zones/42/dns_records/batch'), request.args)
+        self.assertEqual(
+            200, sum(len(ops) for ops in request.kwargs['data'].values())
+        )
+
+    def test_apply_batch_records_indexes_zone_once(self):
+        class CountingRecords:
+            def __init__(self, records):
+                self.records = records
+                self.iterations = 0
+
+            def __iter__(self):
+                self.iterations += 1
+                return iter(self.records)
+
+        zone = Zone('unit.tests.', [])
+        records, changes = self._batch_bulk_changes(zone, 3, 3, 1)
+        records.append({'targets': []})
+        records = CountingRecords(records)
+        provider = self._batch_provider(records=records, batch_records=True)
+
+        provider._apply(Plan(zone, zone, changes, True))
+
+        provider.zone_records.assert_called_once_with(zone)
+        self.assertEqual(1, records.iterations)
+        self._assert_batch_stream([provider._request.call_args], 3, 3, 1)
+
+    def test_apply_batch_records_indexes_apex_alias(self):
+        zone = Zone('unit.tests.', [])
+        record = dict(
+            self._batch_zone_records()[0],
+            id='id-apex',
+            name='unit.tests',
+            type='CNAME',
+            content='old.unit.tests',
+        )
+        provider = self._batch_provider(records=[record], batch_records=True)
+        existing = Record.new(
+            zone, '', {'ttl': 300, 'type': 'ALIAS', 'value': 'old.unit.tests.'}
+        )
+        new = Record.new(
+            zone, '', {'ttl': 300, 'type': 'ALIAS', 'value': 'new.unit.tests.'}
+        )
+
+        provider._apply(Plan(zone, zone, [Update(existing, new)], True))
+
+        provider.zone_records.assert_called_once_with(zone)
+        provider._request.assert_called_once_with(
+            'POST',
+            '/zones/42/dns_records/batch',
+            data={
+                'puts': [
+                    {
+                        'id': 'id-apex',
+                        'content': 'new.unit.tests.',
+                        'name': 'unit.tests',
+                        'type': 'CNAME',
+                        'ttl': 300,
+                        'proxied': False,
+                    }
+                ]
+            },
+        )
+
+    def test_batch_records_off_keeps_individual_requests(self):
+        sequences = []
+        # omission and explicit False must be identical
+        for kwargs in ({}, {'batch_records': False}):
+            with self.subTest(kwargs=kwargs):
+                provider = self._batch_provider(**kwargs)
+                self.assertFalse(provider.batch_records)
+
+                zone = Zone('unit.tests.', [])
+                plan = Plan(zone, zone, self._batch_mixed_changes(zone), True)
+                provider._apply(plan)
+                sequences.append(list(provider._request.mock_calls))
+
+        self.assertEqual(sequences[0], sequences[1])
+        # the unchanged individual method/path/content sequence, in apply
+        # order (Delete -> Create -> Update), with no batch request; the
+        # full data bodies are asserted by the unchanged non-batch tests
+        self.assertEqual(
+            [
+                (
+                    'DELETE',
+                    '/zones/ff12ab34cd5611334422ab3322997650/'
+                    'dns_records/fc12ab34cd5611334422ab3322997699',
+                    None,
+                ),
+                ('POST', '/zones/42/dns_records', '"hello"'),
+                ('POST', '/zones/42/dns_records', '4.4.4.4'),
+                (
+                    'PUT',
+                    '/zones/42/dns_records/fc12ab34cd5611334422ab3322997654',
+                    '2.2.2.2',
+                ),
+                (
+                    'PUT',
+                    '/zones/42/dns_records/fc12ab34cd5611334422ab3322997653',
+                    '3.3.3.3',
+                ),
+            ],
+            [
+                (
+                    request.args[0],
+                    request.args[1],
+                    (request.kwargs.get('data') or {}).get('content'),
+                )
+                for request in sequences[0]
+            ],
+        )
+
+    def test_positional_apply_disabled_reaches_base_provider(self):
+        # batch_records is keyword-only so it cannot consume the positional
+        # arguments that *args forwards to BaseProvider; a trailing
+        # positional still sets apply_disabled and leaves batch_records off
+        provider = CloudflareProvider(
+            'test',
+            'email',
+            'token',
+            None,  # account_id
+            False,  # cdn
+            True,  # pagerules
+            None,  # plan_type
+            False,  # regional_services
+            4,  # retry_count
+            0,  # retry_period
+            0,  # auth_error_retry_count
+            50,  # zones_per_page
+            100,  # records_per_page
+            120,  # min_ttl
+            CloudflareProvider.TIMEOUT,
+            'https://api.cloudflare.com/client/v4',
+            False,  # multi_provider
+            True,  # forwarded to BaseProvider as apply_disabled
+        )
+        self.assertTrue(provider.apply_disabled)
+        self.assertFalse(provider.batch_records)
+
+    def test_batch_records_urlfwd_not_batched(self):
+        # URLFWD/pagerules have no batch equivalent, so they keep the
+        # individual request path even when batch_records is enabled
+        provider = self._batch_provider(batch_records=True)
+
+        zone = Zone('unit.tests.', [])
+        urlfwd = Record.new(
+            zone,
+            'urlfwd',
+            {
+                'ttl': 300,
+                'type': 'URLFWD',
+                'value': {
+                    'path': '/',
+                    'target': 'https://www.unit.tests',
+                    'code': 302,
+                    'masking': '2',
+                    'query': 0,
+                },
+            },
+        )
+        plan = Plan(zone, zone, [Create(urlfwd)], True)
+        provider._apply(plan)
+
+        # an individual pagerules create, and no batch request at all when
+        # the plan has no ordinary DNS writes
+        provider._request.assert_called_once_with(
+            'POST',
+            '/zones/42/pagerules',
+            data={
+                'targets': [
+                    {
+                        'target': 'url',
+                        'constraint': {
+                            'operator': 'matches',
+                            'value': 'urlfwd.unit.tests/',
+                        },
+                    }
+                ],
+                'actions': [
+                    {
+                        'id': 'forwarding_url',
+                        'value': {
+                            'url': 'https://www.unit.tests',
+                            'status_code': 302,
+                        },
+                    }
+                ],
+                'status': 'active',
+            },
+        )
+
+    def test_internal_provider_batch_records_disabled(self):
+        # internal zones reject batching outright, like the other
+        # public-only options
+        with self.assertRaises(ProviderException) as ctx:
+            CloudflareInternalProvider(
+                'test',
+                token='token',
+                account_id='0123456789abcdef0123456789abcdef',
+                batch_records=True,
+            )
+        self.assertIn('batch_records', str(ctx.exception))
+
+        provider = CloudflareInternalProvider(
+            'test', token='token', account_id='0123456789abcdef0123456789abcdef'
+        )
+        self.assertFalse(provider.batch_records)
 
     def test_pagerules(self):
         provider = CloudflareProvider(

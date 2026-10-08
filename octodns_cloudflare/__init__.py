@@ -116,6 +116,11 @@ class CloudflareProvider(BaseProvider):
 
     TIMEOUT = 15
 
+    # dns_records/batch limits the combined operations (deletes, patches,
+    # puts, and posts) per request by plan; 200 is the Free plan maximum,
+    # so it stays valid on every plan.
+    _BATCH_MAX_OPERATIONS = 200
+
     # Per-record CNAME flattening is only available on public DNS zones;
     # Internal DNS applies CNAME flattening by default and cannot be turned
     # off, so it does not expose the setting.
@@ -141,6 +146,7 @@ class CloudflareProvider(BaseProvider):
         api_url="https://api.cloudflare.com/client/v4",
         multi_provider=False,
         *args,
+        batch_records=False,
         **kwargs,
     ):
         self.log = getLogger(f'CloudflareProvider[{id}]')
@@ -181,10 +187,15 @@ class CloudflareProvider(BaseProvider):
         self._sess = sess
         self.api_url = api_url.rstrip('/')
         self.multi_provider = multi_provider
+        self.batch_records = batch_records
 
         self._zones = None
         self._zone_records = {}
         self._zone_regional_hostnames = {}
+        # Pending dns_records/batch payload and converted record index for
+        # the current plan; None when batch_records does not apply.
+        self._batch = None
+        self._batch_record_index = None
         if self.pagerules:
             # copy the class static/ever present list of supported types into
             # an instance property so that when we modify it we won't change
@@ -192,7 +203,7 @@ class CloudflareProvider(BaseProvider):
             self.SUPPORTS = set(self.SUPPORTS)
             self.SUPPORTS.add('URLFWD')
 
-    def _try_request(self, *args, **kwargs):
+    def _try_request(self, *args, retry_5xx=True, **kwargs):
         tries = self.retry_count
         auth_tries = self.auth_error_retry_count
         while True:  # We'll raise to break after our tries expire
@@ -226,7 +237,7 @@ class CloudflareProvider(BaseProvider):
                 )
                 sleep(self.retry_period)
             except Cloudflare5xxError:
-                if tries <= 0:
+                if not retry_5xx or tries <= 0:
                     raise
                 tries -= 1
                 self.log.warning(
@@ -1647,15 +1658,54 @@ class CloudflareProvider(BaseProvider):
             if hostname in managed and hostname not in desired:
                 self._try_request('DELETE', f'{base}/{hostname}')
 
+    def _write_record(self, batch, method, path, data=None, record_id=None):
+        '''Dispatch one record write: collect it into the pending per-zone
+        dns_records/batch payload when batching is active and ``batch`` names
+        a batch operation collection ('posts', 'puts', 'deletes'), otherwise
+        send the individual request unchanged. ``batch=None`` marks writes
+        with no batch equivalent (URLFWD/pagerules); ``record_id`` becomes
+        the batch payload for deletes and is added to it for puts.'''
+        if batch is not None and self._batch is not None:
+            if batch == 'deletes':
+                data = {'id': record_id}
+            elif record_id is not None:
+                data = dict(data, id=record_id)
+            self._batch[batch].append(data)
+        elif data is None:
+            self._try_request(method, path)
+        else:
+            self._try_request(method, path, data=data)
+
     def _apply_Create(self, change):
         new = change.new
         zone_id = self.zones[new.zone.name]['id']
         if new._type == 'URLFWD':
             path = f'/zones/{zone_id}/pagerules'
+            batch = None
         else:
             path = f'/zones/{zone_id}/dns_records'
+            batch = 'posts'
         for content in self._gen_data(new):
-            self._try_request('POST', path, data=content)
+            self._write_record(batch, 'POST', path, data=content)
+
+    def _build_batch_record_index(self, zone):
+        converted = defaultdict(list)
+        raw = defaultdict(list)
+        for record in self.zone_records(zone):
+            # URLFWD records use the pagerules API and retain the existing
+            # lookup path. The batch index is only for ordinary DNS records.
+            if 'targets' in record:
+                continue
+            name = zone.hostname_from_fqdn(record['name'])
+            r = self._record_for(zone, name, record['type'], [record], True)
+            converted[(r.name, r._type)].append((record, r))
+            raw[(record['name'], record['type'])].append(record)
+        self._batch_record_index = (converted, raw)
+
+    def _batch_record_indexes(self, zone):
+        if self._batch_record_index is None:
+            self._build_batch_record_index(zone)
+        return self._batch_record_index
 
     def _apply_Update(self, change):
         zone = change.new.zone
@@ -1664,34 +1714,41 @@ class CloudflareProvider(BaseProvider):
         _type = change.new._type
 
         existing = {}
-        # Find all of the existing CF records for this name & type
-        for record in self.zone_records(zone):
-            if 'targets' in record:
-                uri = record['targets'][0]['constraint']['value']
-                uri = '//' + uri if not uri.startswith('http') else uri
-                parsed_uri = urlsplit(uri)
-                name = zone.hostname_from_fqdn(parsed_uri.netloc)
-                path = parsed_uri.path
-                # assumption, actions will always contain 1 action
-                _values = record['actions'][0]['value']
-                _values['path'] = path
-                _values['ttl'] = 300
-                _values['type'] = 'URLFWD'
-                record.update(_values)
-            else:
-                name = zone.hostname_from_fqdn(record['name'])
-            # Use the _record_for so that we include all of standard
-            # conversion logic
-            r = self._record_for(zone, name, record['type'], [record], True)
-            if hostname == r.name and _type == r._type:
-                # Round trip the single value through a record to contents
-                # flow to get a consistent _gen_data result that matches
-                # what went in to new_contents
-                data = next(self._gen_data(r))
+        # Find all of the existing CF records for this name & type. Batch mode
+        # reuses one converted zone index instead of rescanning every record
+        # for every Update.
+        if self._batch is not None and _type != 'URLFWD':
+            converted, _ = self._batch_record_indexes(zone)
+            candidates = converted.get((hostname, _type), [])
+        else:
+            candidates = []
+            for record in self.zone_records(zone):
+                if 'targets' in record:
+                    uri = record['targets'][0]['constraint']['value']
+                    uri = '//' + uri if not uri.startswith('http') else uri
+                    parsed_uri = urlsplit(uri)
+                    name = zone.hostname_from_fqdn(parsed_uri.netloc)
+                    path = parsed_uri.path
+                    # assumption, actions will always contain 1 action
+                    _values = record['actions'][0]['value']
+                    _values['path'] = path
+                    _values['ttl'] = 300
+                    _values['type'] = 'URLFWD'
+                    record.update(_values)
+                else:
+                    name = zone.hostname_from_fqdn(record['name'])
+                # Use the _record_for so that we include all of standard
+                # conversion logic
+                r = self._record_for(zone, name, record['type'], [record], True)
+                if hostname == r.name and _type == r._type:
+                    candidates.append((record, r))
 
-                # Record the record_id and data for this existing record
-                key = self._gen_key(data)
-                existing[key] = {'record_id': record['id'], 'data': data}
+        for record, r in candidates:
+            # Round trip the single value through a record to contents flow to
+            # get a consistent _gen_data result that matches new_contents.
+            data = next(self._gen_data(r))
+            key = self._gen_key(data)
+            existing[key] = {'record_id': record['id'], 'data': data}
 
         # Build up a list of new CF records for this Update
         new = {self._gen_key(d): d for d in self._gen_data(change.new)}
@@ -1723,10 +1780,11 @@ class CloudflareProvider(BaseProvider):
         # To do this as safely as possible we'll add new things first, update
         # existing things, and then remove old things. This should (try) and
         # ensure that we have as many value CF records in their system as
-        # possible at any given time. Ideally we'd have a "batch" API that
-        # would allow create, delete, and upsert style stuff so operations
-        # could be done atomically, but that's not available so we made the
-        # best of it...
+        # possible at any given time. This ordering only holds when writes
+        # are sent individually (the default); with batch_records enabled
+        # the creates, updates, and deletes below are collected into
+        # dns_records/batch chunks that Cloudflare executes as deletes,
+        # then puts, then posts.
 
         # However, there are record types like CNAME that can only have a
         # single value. B/c of that our create and then delete approach isn't
@@ -1752,11 +1810,13 @@ class CloudflareProvider(BaseProvider):
         # Creates
         if _type == 'URLFWD':
             path = f'/zones/{zone_id}/pagerules'
+            batch = None
         else:
             path = f'/zones/{zone_id}/dns_records'
+            batch = 'posts'
         for _, data in sorted(creates.items()):
             self.log.debug('_apply_Update: creating %s', data)
-            self._try_request('POST', path, data=data)
+            self._write_record(batch, 'POST', path, data=data)
 
         # Updates
         for _, info in sorted(updates.items()):
@@ -1765,8 +1825,10 @@ class CloudflareProvider(BaseProvider):
             old_data = info['old_data']
             if _type == 'URLFWD':
                 path = f'/zones/{zone_id}/pagerules/{record_id}'
+                batch = None
             else:
                 path = f'/zones/{zone_id}/dns_records/{record_id}'
+                batch = 'puts'
             # When the desired record leaves flatten_cname unmanaged (absent)
             # on an ordinary (non-proxied) CNAME, preserve an existing API true
             # value so an unrelated update does not clear it. Explicit desired
@@ -1784,7 +1846,9 @@ class CloudflareProvider(BaseProvider):
                 data,
                 old_data,
             )
-            self._try_request('PUT', path, data=data)
+            self._write_record(
+                batch, 'PUT', path, data=data, record_id=record_id
+            )
 
         # Deletes
         for _, info in sorted(deletes.items()):
@@ -1792,12 +1856,14 @@ class CloudflareProvider(BaseProvider):
             old_data = info['data']
             if _type == 'URLFWD':
                 path = f'/zones/{zone_id}/pagerules/{record_id}'
+                batch = None
             else:
                 path = f'/zones/{zone_id}/dns_records/{record_id}'
+                batch = 'deletes'
             self.log.debug(
                 '_apply_Update: removing %s, %s', record_id, old_data
             )
-            self._try_request('DELETE', path)
+            self._write_record(batch, 'DELETE', path, record_id=record_id)
 
     def _apply_Delete(self, change):
         existing = change.existing
@@ -1805,7 +1871,12 @@ class CloudflareProvider(BaseProvider):
         # Make sure to map ALIAS to CNAME when looking for the target to delete
         existing_type = 'CNAME' if existing._type == 'ALIAS' else existing._type
         zone_id = self.zones[existing.zone.name]['id']
-        for record in self.zone_records(existing.zone):
+        if self._batch is not None and existing_type != 'URLFWD':
+            _, raw = self._batch_record_indexes(existing.zone)
+            records = raw.get((existing_name, existing_type), [])
+        else:
+            records = self.zone_records(existing.zone)
+        for record in records:
             if 'targets' in record and self.pagerules:
                 uri = record['targets'][0]['constraint']['value']
                 uri = '//' + uri if not uri.startswith('http') else uri
@@ -1817,7 +1888,7 @@ class CloudflareProvider(BaseProvider):
                     and existing_type == record_type
                 ):
                     path = f'/zones/{zone_id}/pagerules/{record["id"]}'
-                    self._try_request('DELETE', path)
+                    self._write_record(None, 'DELETE', path)
             else:
                 if (
                     existing_name == record['name']
@@ -1835,7 +1906,9 @@ class CloudflareProvider(BaseProvider):
                         f'/zones/{record_zone_id}/dns_records/'
                         f'{record["id"]}'
                     )
-                    self._try_request('DELETE', path)
+                    self._write_record(
+                        'deletes', 'DELETE', path, record_id=record['id']
+                    )
 
     def _available_plans(self, zone_name):
         zone_id = self.zones.get(zone_name, {}).get('id', None)
@@ -1924,6 +1997,39 @@ class CloudflareProvider(BaseProvider):
         if desired_plan:
             self._update_plan(plan.desired.name, desired_plan)
 
+    def _flush_batch(self, plan):
+        '''Send the writes collected during this apply as dns_records/batch
+        requests of at most _BATCH_MAX_OPERATIONS combined operations each;
+        no-op when batching is off or the plan had no ordinary writes.
+        Cloudflare executes each request as deletes, patches, puts, then
+        posts; chunks are cut so that order holds across requests.'''
+        if self._batch is None:
+            return
+        # Flatten in Cloudflare's fixed execution order, so chunk boundaries
+        # preserve the global deletes, puts, posts order and the collected
+        # order within each category
+        ops = [
+            (name, op)
+            for name in ('deletes', 'puts', 'posts')
+            for op in self._batch.get(name, [])
+        ]
+        self._batch = None
+        if not ops:
+            return
+        zone_id = self.zones[plan.desired.name]['id']
+        path = f'/zones/{zone_id}/dns_records/batch'
+        max_ops = self._BATCH_MAX_OPERATIONS
+        for start in range(0, len(ops), max_ops):
+            chunk = ops[start : start + max_ops]
+            batch = defaultdict(list)
+            for name, op in chunk:
+                batch[name].append(op)
+            self.log.info(
+                'applying %d dns record operations in one batch request',
+                len(chunk),
+            )
+            self._try_request('POST', path, data=dict(batch), retry_5xx=False)
+
     def _apply(self, plan):
         desired = plan.desired
         changes = plan.changes
@@ -1945,12 +2051,20 @@ class CloudflareProvider(BaseProvider):
 
         # Force the operation order to be Delete() -> Create() -> Update()
         # This will help avoid problems in updating a CNAME record into an
-        # A record and vice-versa
+        # A record and vice-versa. With batch_records enabled this order
+        # only governs collection: the collected ordinary DNS writes go out
+        # in dns_records/batch chunks that Cloudflare executes in its fixed
+        # order (deletes, then puts, then posts).
         changes.sort(key=self._change_keyer)
+
+        self._batch = defaultdict(list) if self.batch_records else None
+        self._batch_record_index = None
 
         for change in changes:
             class_name = change.__class__.__name__
             getattr(self, f'_apply_{class_name}')(change)
+
+        self._flush_batch(plan)
 
         # Region is a per-hostname property on a separate API; reconcile it for
         # the whole zone once, after the per-record changes are applied.
@@ -1959,6 +2073,7 @@ class CloudflareProvider(BaseProvider):
         # clear the cache
         self._zone_records.pop(zone_name, None)
         self._zone_regional_hostnames.pop(zone_name, None)
+        self._batch_record_index = None
 
     def _extra_changes(self, existing, desired, changes):
         extra_changes = []
@@ -2033,7 +2148,13 @@ class CloudflareInternalProvider(CloudflareProvider):
     # leak URLFWD into this subclass.
     SUPPORTS = set(CloudflareProvider.SUPPORTS)
 
-    _FORBIDDEN_PARAMS = ('cdn', 'pagerules', 'plan_type', 'regional_services')
+    _FORBIDDEN_PARAMS = (
+        'cdn',
+        'pagerules',
+        'plan_type',
+        'regional_services',
+        'batch_records',
+    )
 
     # Internal DNS applies CNAME flattening by default and the per-record
     # flattening setting cannot be turned off.
@@ -2050,14 +2171,16 @@ class CloudflareInternalProvider(CloudflareProvider):
             if forbidden in kwargs:
                 raise CloudflareInternalProviderException(
                     f'{id}: {forbidden!r} is not supported — Cloudflare '
-                    'internal zones have no proxy, pagerules, plan, or '
-                    'regional services'
+                    'internal zones have no proxy, pagerules, plan, '
+                    'regional services, or dns_records/batch support'
                 )
         # Parent defaults pagerules=True, which would re-add URLFWD to SUPPORTS.
         # regional_services is forced off: internal zones have no edge, so the
         # addressing API never applies. That single switch gates every region
         # code path inherited from CloudflareProvider (fetch, validate,
         # reconcile), so no per-method overrides are needed here.
+        # batch_records is forced off: ordinary writes for internal zones keep
+        # the individual request path.
         super().__init__(
             id,
             *args,
@@ -2066,6 +2189,7 @@ class CloudflareInternalProvider(CloudflareProvider):
             pagerules=False,
             plan_type=None,
             regional_services=False,
+            batch_records=False,
             **kwargs,
         )
         self.view_id = view_id
