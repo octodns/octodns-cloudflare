@@ -5920,3 +5920,325 @@ class TestCloudflareInternalProviderFlatten(TestCase):
         )
 
         self.assertEqual(0, len(extra_changes))
+
+
+class TestCloudflareProviderRecordIndex(TestCase):
+    def _a(self, _id, name, content, proxied=False):
+        return {
+            'id': _id,
+            'type': 'A',
+            'name': name,
+            'content': content,
+            'proxiable': True,
+            'proxied': proxied,
+            'ttl': 300,
+            'locked': False,
+            'zone_id': '42',
+        }
+
+    def _pagerule(self, _id, uri, url):
+        return {
+            'id': _id,
+            'targets': [
+                {
+                    'target': 'url',
+                    'constraint': {'operator': 'matches', 'value': uri},
+                }
+            ],
+            'actions': [
+                {
+                    'id': 'forwarding_url',
+                    'value': {'url': url, 'status_code': 302},
+                }
+            ],
+            'priority': 1,
+            'status': 'active',
+        }
+
+    def _provider(self, records, **kwargs):
+        provider = CloudflareProvider('test', 'email', 'token', **kwargs)
+        provider._zones = {'unit.tests.': {'id': '42', 'name_servers': []}}
+        provider._request = Mock(return_value={'result': {}})
+        provider.zone_records = Mock(return_value=records)
+        return provider
+
+    def test_only_converts_records_at_changed_names(self):
+        records = [
+            self._a('a1', 'a.unit.tests', '1.1.1.1'),
+            self._a('b1', 'b.unit.tests', '2.2.2.2'),
+            self._a('a2', 'a.unit.tests', '3.3.3.3'),
+            self._a('c1', 'c.unit.tests', '4.4.4.4'),
+            self._a('d1', 'd.unit.tests', '5.5.5.5'),
+        ]
+        provider = self._provider(records)
+
+        zone = Zone('unit.tests.', [])
+        existing_a = Record.new(
+            zone,
+            'a',
+            {'ttl': 300, 'type': 'A', 'values': ['1.1.1.1', '3.3.3.3']},
+        )
+        new_a = Record.new(
+            zone,
+            'a',
+            {'ttl': 300, 'type': 'A', 'values': ['1.1.1.1', '6.6.6.6']},
+        )
+        existing_c = Record.new(
+            zone, 'c', {'ttl': 300, 'type': 'A', 'value': '4.4.4.4'}
+        )
+        existing_d = Record.new(
+            zone, 'd', {'ttl': 300, 'type': 'A', 'value': '5.5.5.5'}
+        )
+        plan = Plan(
+            zone,
+            zone,
+            [Update(existing_a, new_a), Delete(existing_c), Delete(existing_d)],
+            True,
+        )
+
+        with patch.object(
+            provider, '_record_for', wraps=provider._record_for
+        ) as record_for:
+            provider._apply(plan)
+
+        # only the two records at a.unit.tests are converted, not every record
+        # in the zone for every change
+        self.assertEqual(2, record_for.call_count)
+        provider._request.assert_has_calls(
+            [
+                call('DELETE', '/zones/42/dns_records/c1'),
+                call('DELETE', '/zones/42/dns_records/d1'),
+                call(
+                    'PUT',
+                    '/zones/42/dns_records/a1',
+                    data={
+                        'content': '1.1.1.1',
+                        'type': 'A',
+                        'name': 'a.unit.tests',
+                        'proxied': False,
+                        'ttl': 300,
+                    },
+                ),
+                call(
+                    'PUT',
+                    '/zones/42/dns_records/a2',
+                    data={
+                        'content': '6.6.6.6',
+                        'type': 'A',
+                        'name': 'a.unit.tests',
+                        'proxied': False,
+                        'ttl': 300,
+                    },
+                ),
+            ]
+        )
+        self.assertEqual(4, provider._request.call_count)
+        # the cache is dropped once the apply finishes
+        self.assertNotIn('unit.tests.', provider._zone_record_index)
+
+    def test_rebuilt_when_zone_records_changes(self):
+        provider = self._provider([self._a('a1', 'a.unit.tests', '1.1.1.1')])
+
+        zone = Zone('unit.tests.', [])
+        existing = Record.new(
+            zone, 'a', {'ttl': 300, 'type': 'A', 'value': '1.1.1.1'}
+        )
+        new = Record.new(
+            zone, 'a', {'ttl': 300, 'type': 'A', 'value': '2.2.2.2'}
+        )
+        provider._apply_Update(Update(existing, new))
+        provider._request.assert_called_once_with(
+            'PUT',
+            '/zones/42/dns_records/a1',
+            data={
+                'content': '2.2.2.2',
+                'type': 'A',
+                'name': 'a.unit.tests',
+                'proxied': False,
+                'ttl': 300,
+            },
+        )
+
+        # a new zone_records list is picked up rather than the stale index
+        provider.zone_records.return_value = [
+            self._a('a9', 'a.unit.tests', '1.1.1.1')
+        ]
+        provider._request.reset_mock()
+        provider._apply_Update(Update(existing, new))
+        provider._request.assert_called_once_with(
+            'PUT',
+            '/zones/42/dns_records/a9',
+            data={
+                'content': '2.2.2.2',
+                'type': 'A',
+                'name': 'a.unit.tests',
+                'proxied': False,
+                'ttl': 300,
+            },
+        )
+
+    def test_update_matches_normalized_name(self):
+        provider = self._provider([self._a('a1', 'A.Unit.Tests', '1.1.1.1')])
+
+        zone = Zone('unit.tests.', [])
+        existing = Record.new(
+            zone, 'a', {'ttl': 300, 'type': 'A', 'value': '1.1.1.1'}
+        )
+        new = Record.new(
+            zone, 'a', {'ttl': 300, 'type': 'A', 'value': '2.2.2.2'}
+        )
+        provider._apply_Update(Update(existing, new))
+        provider._request.assert_called_once_with(
+            'PUT',
+            '/zones/42/dns_records/a1',
+            data={
+                'content': '2.2.2.2',
+                'type': 'A',
+                'name': 'a.unit.tests',
+                'proxied': False,
+                'ttl': 300,
+            },
+        )
+
+    def test_delete_alias_removes_root_cname(self):
+        provider = self._provider(
+            [
+                self._a('a1', 'unit.tests', '1.1.1.1'),
+                {
+                    'id': 'cname1',
+                    'type': 'CNAME',
+                    'name': 'unit.tests',
+                    'content': 'www.example.com',
+                    'proxiable': True,
+                    'proxied': False,
+                    'ttl': 300,
+                    'locked': False,
+                },
+            ]
+        )
+
+        zone = Zone('unit.tests.', [])
+        existing = Record.new(
+            zone, '', {'ttl': 300, 'type': 'ALIAS', 'value': 'www.example.com.'}
+        )
+        provider._apply_Delete(Delete(existing))
+        provider._request.assert_called_once_with(
+            'DELETE', '/zones/42/dns_records/cname1'
+        )
+
+    def test_update_finds_cdn_rewritten_records(self):
+        provider = self._provider(
+            [
+                self._a('a1', 'cdn.unit.tests', '1.1.1.1', proxied=True),
+                self._a('o1', 'other.unit.tests', '2.2.2.2', proxied=True),
+            ],
+            cdn=True,
+        )
+
+        zone = Zone('unit.tests.', [])
+        existing = Record.new(
+            zone,
+            'cdn',
+            {
+                'ttl': 300,
+                'type': 'CNAME',
+                'value': 'cdn.unit.tests.cdn.cloudflare.net.',
+            },
+        )
+        new = Record.new(
+            zone,
+            'cdn',
+            {'ttl': 300, 'type': 'CNAME', 'value': 'www.example.com.'},
+        )
+        provider._apply_Update(Update(existing, new))
+        # the proxied A at cdn.unit.tests is what the CDN CNAME was read from,
+        # so it's the record that gets updated
+        provider._request.assert_called_once_with(
+            'PUT',
+            '/zones/42/dns_records/a1',
+            data={
+                'content': 'www.example.com.',
+                'type': 'CNAME',
+                'name': 'cdn.unit.tests',
+                'proxied': False,
+                'ttl': 300,
+            },
+        )
+
+    def test_mixed_dns_records_and_pagerules(self):
+        provider = self._provider(
+            [
+                self._a('a1', 'urlfwd.unit.tests', '1.1.1.1'),
+                self._pagerule(
+                    'pr1', 'urlfwd.unit.tests/', 'https://www.unit.tests'
+                ),
+                self._pagerule(
+                    'pr2', 'other.unit.tests/', 'https://other.unit.tests'
+                ),
+            ],
+            pagerules=True,
+        )
+
+        zone = Zone('unit.tests.', [])
+        self.assertEqual(
+            ['a1', 'pr1'],
+            [
+                r['id']
+                for r in provider._zone_records_named(zone, 'urlfwd.unit.tests')
+            ],
+        )
+        self.assertEqual(
+            [], provider._zone_records_named(zone, 'missing.unit.tests')
+        )
+
+        existing = Record.new(
+            zone,
+            'urlfwd',
+            {
+                'ttl': 300,
+                'type': 'URLFWD',
+                'value': {
+                    'path': '/',
+                    'target': 'https://www.unit.tests',
+                    'code': 302,
+                    'masking': 2,
+                    'query': 0,
+                },
+            },
+        )
+        new = Record.new(
+            zone,
+            'urlfwd',
+            {
+                'ttl': 300,
+                'type': 'URLFWD',
+                'value': {
+                    'path': '/',
+                    'target': 'https://new.unit.tests',
+                    'code': 302,
+                    'masking': 2,
+                    'query': 0,
+                },
+            },
+        )
+        provider._apply_Update(Update(existing, new))
+        self.assertEqual(1, provider._request.call_count)
+        method, path = provider._request.call_args[0]
+        self.assertEqual('PUT', method)
+        self.assertEqual('/zones/42/pagerules/pr1', path)
+
+        provider._request.reset_mock()
+        provider._apply_Delete(Delete(existing))
+        provider._request.assert_called_once_with(
+            'DELETE', '/zones/42/pagerules/pr1'
+        )
+
+        # an A at the same name as a pagerule leaves the pagerule alone
+        provider._request.reset_mock()
+        existing_a = Record.new(
+            zone, 'urlfwd', {'ttl': 300, 'type': 'A', 'value': '1.1.1.1'}
+        )
+        provider._apply_Delete(Delete(existing_a))
+        provider._request.assert_called_once_with(
+            'DELETE', '/zones/42/dns_records/a1'
+        )
