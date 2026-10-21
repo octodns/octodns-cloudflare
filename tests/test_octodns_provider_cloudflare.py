@@ -2204,6 +2204,73 @@ class TestCloudflareProvider(TestCase):
         plan = provider.plan(wanted)
         self.assertEqual(False, hasattr(plan, 'changes'))
 
+    def test_cdn_target_without_cdn_mode(self):
+        provider = CloudflareProvider('test', 'email', 'token', 'account_id')
+
+        # an existing DNS-only CNAME pointing at another account's CDN
+        provider.zone_records = Mock(
+            return_value=[
+                {
+                    "id": "fc12ab34cd5611334422ab3322997642",
+                    "type": "CNAME",
+                    "name": "existing.unit.tests",
+                    "content": "existing.other.tests.cdn.cloudflare.net",
+                    "proxiable": True,
+                    "proxied": False,
+                    "ttl": 300,
+                    "locked": False,
+                    "zone_id": "ff12ab34cd5611334422ab3322997650",
+                    "zone_name": "unit.tests",
+                    "modified_on": "2017-03-11T18:01:43.420689Z",
+                    "created_on": "2017-03-11T18:01:43.420689Z",
+                    "meta": {"auto_added": False},
+                }
+            ]
+        )
+
+        # without cdn mode .cdn.cloudflare.net. targets are ordinary records
+        # that can be created and updated
+        wanted = Zone('unit.tests.', [])
+        wanted.add_record(
+            Record.new(
+                wanted,
+                '',
+                {
+                    'ttl': 300,
+                    'type': 'ALIAS',
+                    'value': 'other.tests.cdn.cloudflare.net.',
+                },
+            )
+        )
+        wanted.add_record(
+            Record.new(
+                wanted,
+                'existing',
+                {
+                    'ttl': 300,
+                    'type': 'CNAME',
+                    'value': 'changed.other.tests.cdn.cloudflare.net.',
+                },
+            )
+        )
+        wanted.add_record(
+            Record.new(
+                wanted,
+                'new',
+                {
+                    'ttl': 300,
+                    'type': 'CNAME',
+                    'value': 'new.other.tests.cdn.cloudflare.net.',
+                },
+            )
+        )
+
+        plan = provider.plan(wanted)
+        self.assertEqual(
+            [('', Create), ('existing', Update), ('new', Create)],
+            sorted((c.record.name, type(c)) for c in plan.changes),
+        )
+
     def test_unproxiabletype_recordfor_returnsrecordwithnocloudflare(self):
         provider = CloudflareProvider('test', 'email', 'token')
         name = "unit.tests"

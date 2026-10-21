@@ -865,12 +865,14 @@ class CloudflareProvider(BaseProvider):
             if new == existing:
                 return False
 
-        # If this is a record to enable Cloudflare CDN don't update as
-        # we don't know the original values.
-        if change.record._type in (
-            'ALIAS',
-            'CNAME',
-        ) and change.record.value.endswith('.cdn.cloudflare.net.'):
+        # In CDN mode proxied records are rewritten to point at
+        # .cdn.cloudflare.net., don't update them as we don't know the
+        # original values. Outside of CDN mode these are ordinary records.
+        if (
+            self.cdn
+            and change.record._type in ('ALIAS', 'CNAME')
+            and change.record.value.endswith('.cdn.cloudflare.net.')
+        ):
             return False
 
         return True
