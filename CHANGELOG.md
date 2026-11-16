@@ -1,3 +1,22 @@
+## 2.0.0 - 2026-11-15
+
+Major:
+* Apply DNS record changes with Cloudflare's dns_records/batch API, up to the new batch_size option (default 200) operations per request, instead of one request per record write. Page Rules and Regional Services are still written individually.
+
+Minor:
+* Fix syncing of CloudFlare-managed NS records for multi-provider DNS setups - [#184](https://github.com/octodns/octodns-cloudflare/pull/184)
+* Add opt-in per-record CNAME flattening support - [#183](https://github.com/octodns/octodns-cloudflare/pull/183)
+* Modernize packaging: move build metadata from setup.py into pyproject.toml, remove setup.py; require Python >=3.10 - [#179](https://github.com/octodns/octodns-cloudflare/pull/179)
+* CloudflareProvider can now manage Cloudflare per-value (per-object) `comment` and `tags` via an optional `values` list under `octodns.cloudflare`, keyed by value. Records whose values carry differing comment/tags are now dumped and applied without losing metadata; the record-level `comment`/`tags` remain as a default for values without an entry, and a value's entry is a clean override. Per-value entries that reference a value not on the record are reported at plan time via `strict_supports`. The `TagAllowListFilter`/`TagRejectListFilter` processors now match on per-value tags as well as record-level tags. See #142. - [#178](https://github.com/octodns/octodns-cloudflare/pull/178)
+* CloudflareProvider can now manage a record's Cloudflare Regional Services (Data Localization) region via `octodns.cloudflare.region` on `A`/`AAAA`/`CNAME`/`ALIAS` records — read on populate, and created/changed/removed on apply. It is opt-in via the new `regional_services` provider flag (default `false`), so there is no behaviour change or extra API call for existing users. Cloudflare applies a region per-hostname and only to proxied records, so conflicting or non-proxied usage is reported via `strict_supports`. See #143. - [#174](https://github.com/octodns/octodns-cloudflare/pull/174)
+* Wait for the duration in Cloudflare's `Retry-After` header on 429 responses, falling back to `retry_period`
+
+Patch:
+* Look up existing Cloudflare records by name when applying updates and deletes instead of converting every record in the zone for each change, which makes applies with many changes to large zones much faster - [#192](https://github.com/octodns/octodns-cloudflare/pull/192)
+* Only skip changes to `.cdn.cloudflare.net.` CNAME/ALIAS targets when `cdn` mode is enabled - [#196](https://github.com/octodns/octodns-cloudflare/pull/196)
+* Handle empty or non-JSON error responses from Cloudflare so rate-limit and auth retries still apply - [#187](https://github.com/octodns/octodns-cloudflare/pull/187)
+* `retry_count` now retries 429 responses the configured number of times instead of one fewer
+
 ## 1.2.0 - 2026-06-19
 
 Minor:
