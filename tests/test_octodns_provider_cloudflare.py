@@ -5623,6 +5623,92 @@ class TestCloudflareProvider(TestCase):
         self.assertEqual('search', contents['"verification=abc"']['comment'])
         self.assertEqual('spf', contents['"v=spf1 ~all"']['comment'])
 
+    @patch('octodns_cloudflare.BaseProvider._process_desired_zone')
+    def test_per_value_metadata_txt_quoted_content(self, mock_base):
+        # Cloudflare commonly stores TXT content wrapped in double quotes.
+        # Record.new strips them from the record's values, so per-value keys
+        # must be normalized the same way or the dump can't be planned back
+        mock_base.side_effect = lambda desired: desired
+        provider = CloudflareProvider(
+            'test', 'email', 'token', strict_supports=True
+        )
+        provider.zone_records = Mock(
+            return_value=[
+                {
+                    'id': 't1',
+                    'type': 'TXT',
+                    'name': 'txt.unit.tests',
+                    'content': '"google-site-verification=abc123"',
+                    'comment': 'first comment',
+                    'ttl': 300,
+                },
+                {
+                    'id': 't2',
+                    'type': 'TXT',
+                    'name': 'txt.unit.tests',
+                    'content': '"v=spf1 include:example.net ~all"',
+                    'ttl': 300,
+                },
+            ]
+        )
+        existing = Zone('unit.tests.', [])
+        provider.populate(existing)
+        record = next(iter(existing.records))
+
+        # the dumped per-value key matches the record's (unquoted) value and
+        # is a plain str so it dumps as a plain YAML string
+        self.assertEqual(
+            [
+                {
+                    'value': 'google-site-verification=abc123',
+                    'comment': 'first comment',
+                }
+            ],
+            record.octodns['cloudflare']['values'],
+        )
+        self.assertIs(
+            str, type(record.octodns['cloudflare']['values'][0]['value'])
+        )
+
+        def desired_with_key(key):
+            desired = Zone('unit.tests.', [])
+            desired.add_record(
+                Record.new(
+                    desired,
+                    'txt',
+                    {
+                        'ttl': 300,
+                        'type': 'TXT',
+                        'values': [
+                            'google-site-verification=abc123',
+                            'v=spf1 include:example.net ~all',
+                        ],
+                        'octodns': {
+                            'cloudflare': {
+                                'values': [
+                                    {'value': key, 'comment': 'first comment'}
+                                ]
+                            }
+                        },
+                    },
+                )
+            )
+            return desired
+
+        # both the unquoted key and the quoted key written by 2.0.0 dumps
+        # validate and plan no metadata changes against the existing zone
+        for key in (
+            'google-site-verification=abc123',
+            '"google-site-verification=abc123"',
+        ):
+            desired = desired_with_key(key)
+            provider._process_desired_zone(desired)
+            changes = existing.changes(desired, provider)
+            self.assertEqual([], changes)
+            self.assertEqual(
+                [], provider._extra_changes(existing, desired, changes)
+            )
+
     def test_change_keyer(self):
         provider = CloudflareProvider('test', 'email', 'token')
 
