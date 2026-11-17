@@ -1306,8 +1306,9 @@ class CloudflareProvider(BaseProvider):
         (octoDNS data) form. process, not the bare constructor, is what applies
         type-specific cleanup such as stripping the surrounding quotes
         Cloudflare stores on TXT content, so a per-value key and the record's
-        own values end up in the same form. Values the type can't process are
-        returned unchanged.'''
+        own values end up in the same form. Values process rejects fall back
+        to the bare constructor (e.g. a YAML int TXT key such as 1234 becomes
+        '1234'); values neither can handle are returned unchanged.'''
         value_type = record._value_type
         try:
             if getattr(record, 'values', None) is None:
@@ -1315,7 +1316,12 @@ class CloudflareProvider(BaseProvider):
             else:
                 normalized = value_type.process([value])[0]
         except Exception:
-            return value
+            # process assumes the authored type (e.g. TXT indexes v[0]), so a
+            # non-str key like a YAML int falls back to the constructor
+            try:
+                normalized = value_type(value)
+            except Exception:
+                return value
         normalized = getattr(normalized, 'data', normalized)
         if isinstance(normalized, str):
             # drop str subclasses (e.g. _ChunkedValue) so the value dumps as a

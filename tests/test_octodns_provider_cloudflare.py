@@ -5709,6 +5709,38 @@ class TestCloudflareProvider(TestCase):
                 [], provider._extra_changes(existing, desired, changes)
             )
 
+    @patch('octodns_cloudflare.BaseProvider._process_desired_zone')
+    def test_per_value_metadata_txt_numeric_key(self, mock_base):
+        # A per-value key authored as a YAML number (value: 1234) can't go
+        # through the TXT value type's process, but must still match the
+        # record's '1234' value via the constructor fallback
+        mock_base.side_effect = lambda desired: desired
+        provider = CloudflareProvider(
+            'test', 'email', 'token', strict_supports=True
+        )
+        desired = Zone('unit.tests.', [])
+        record = Record.new(
+            desired,
+            'txt',
+            {
+                'ttl': 300,
+                'type': 'TXT',
+                'values': ['1234', 'v=spf1 ~all'],
+                'octodns': {
+                    'cloudflare': {
+                        'values': [{'value': 1234, 'comment': 'numeric'}]
+                    }
+                },
+            },
+        )
+        desired.add_record(record)
+        # validates under strict_supports without "not one of the record's
+        # values"
+        provider._process_desired_zone(desired)
+        contents = {d['content']: d for d in provider._gen_data(record)}
+        self.assertEqual('numeric', contents['"1234"']['comment'])
+        self.assertNotIn('comment', contents['"v=spf1 ~all"'])
+
     def test_change_keyer(self):
         provider = CloudflareProvider('test', 'email', 'token')
 
