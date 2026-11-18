@@ -1298,11 +1298,36 @@ class CloudflareProvider(BaseProvider):
         would surface early. Values the type can't parse fall back to their
         raw form — they won't match anything and _validate_value_metadata
         reports them at plan time.'''
+        return self._meta_value_key(self._normalize_value(record, value))
+
+    def _normalize_value(self, record, value):
+        '''Runs a raw value through the record's value type the same way
+        Record.new does (_value_type.process), returning it in native
+        (octoDNS data) form. process, not the bare constructor, is what applies
+        type-specific cleanup such as stripping the surrounding quotes
+        Cloudflare stores on TXT content, so a per-value key and the record's
+        own values end up in the same form. Values process rejects fall back
+        to the bare constructor (e.g. a YAML int TXT key such as 1234 becomes
+        '1234'); values neither can handle are returned unchanged.'''
+        value_type = record._value_type
         try:
-            normalized = record._value_type(value)
+            if getattr(record, 'values', None) is None:
+                normalized = value_type.process(value)
+            else:
+                normalized = value_type.process([value])[0]
         except Exception:
-            return self._meta_value_key(value)
-        return self._meta_value_key(getattr(normalized, 'data', normalized))
+            # process assumes the authored type (e.g. TXT indexes v[0]), so a
+            # non-str key like a YAML int falls back to the constructor
+            try:
+                normalized = value_type(value)
+            except Exception:
+                return value
+        normalized = getattr(normalized, 'data', normalized)
+        if isinstance(normalized, str):
+            # drop str subclasses (e.g. _ChunkedValue) so the value dumps as a
+            # plain YAML string
+            normalized = str(normalized)
+        return normalized
 
     def _value_metadata(self, record):
         '''Per-value metadata entries (octodns.cloudflare.values) keyed by
@@ -1342,10 +1367,13 @@ class CloudflareProvider(BaseProvider):
             tags = tuple(r.get('tags') or [])
             meta = (comment, tags) if (comment or tags) else None
             single = data_for(_type, [r])
-            native = (
-                single['values'][0]
-                if 'values' in single
-                else single.get('value')
+            native = self._normalize_value(
+                record,
+                (
+                    single['values'][0]
+                    if 'values' in single
+                    else single.get('value')
+                ),
             )
             key = self._meta_value_key(native)
             if key in metadata:
