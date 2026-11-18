@@ -1,3 +1,8 @@
+## 2.0.1 - 2026-11-18
+
+Patch:
+* Fix per-value comment/tags on TXT records whose Cloudflare content is quoted, so a dumped zone plans cleanly instead of failing validation - [#201](https://github.com/octodns/octodns-cloudflare/pull/201)
+
 ## 2.0.0 - 2026-11-15
 
 Major:
